@@ -86,10 +86,12 @@ or NIL if PACKAGE is not a UNIX FS package."
         (t (format nil "~a" object))))
 (defmethod to-argument ((object fof:file)) (fof:path object))
 
-(defclass result () ())
-(defun repl-connect-result (result)
-  (bind ((input-stream (uiop:process-info-input result))
-         (output-stream (uiop:process-info-output result))
+(defclass actor ()
+  ((input :reader input :initarg :input)
+   (output :reader output :initarg :output)
+   (process-info :reader process-info :initarg :process-info)))
+(defun repl-connect (actor)
+  (bind (((:accessors input output) actor)
          (repl-input *standard-input*)
          (repl-output *standard-output*)
          (output-copier
@@ -98,10 +100,10 @@ or NIL if PACKAGE is not a UNIX FS package."
              (unwind-protect
                   (loop
                     (handler-case
-                        (write-char (read-char output-stream) repl-output)
+                        (write-char (read-char output) repl-output)
                       (end-of-file () (return))
                       (stream-error () (return))))
-               (uiop:close-streams result)))
+               (uiop:close-streams (process-info actor))))
            :name "Unix in Lisp REPL Output Copier"))
          (input-copier
           (bt:make-thread
@@ -110,44 +112,45 @@ or NIL if PACKAGE is not a UNIX FS package."
                (loop
                  (handler-case
                      (progn
-                       (write-char (read-char repl-input) input-stream)
-                       (force-output input-stream))
+                       (write-char (read-char repl-input) input)
+                       (force-output input))
                    (end-of-file ()
-                     (close input-stream))
+                     (close input))
                    (stream-error () (return))))))
            :name "Unix in Lisp REPL Input Copier")))
     (unwind-protect
-         (uiop:wait-process result)
+         (uiop:wait-process (process-info actor))
       (ignore-errors
        (bt:interrupt-thread input-copier (lambda ()
                                            (ignore-errors (throw 'finish nil))))))
     (values)))
-(defmethod print-object ((object result) stream)
-  (repl-connect-result object))
+(defmethod print-object ((object actor) stream)
+  (repl-connect object))
 
 (defgeneric content (object &optional format))
-(defmethod content ((object result) &optional (format :string))
+(defmethod content ((actor actor) &optional (format :string))
   (unwind-protect
-       (prog1 (uiop:slurp-input-stream format (uiop:process-info-output object))
-         (uiop:wait-process object))
-    (uiop:close-streams object)))
-(defmethod content ((object file) &optional (format :string))
-  (with-open-file (stream (fof:path object) :direction :input)
+       (prog1 (uiop:slurp-input-stream format (output actor))
+         (uiop:wait-process (process-info actor)))
+    (uiop:close-streams (process-info actor))))
+(defmethod content ((file file) &optional (format :string))
+  (with-open-file (stream (fof:path file) :direction :input)
     (uiop:slurp-input-stream format stream)))
 
-(defnclo execute (file) (&rest args &aux input)
-  (when (typep (lastcar args) 'result)
-    (setq input (lastcar args)
+(defnclo execute (file) (&rest args &aux prev-actor)
+  (when (typep (lastcar args) 'actor)
+    (setq prev-actor (lastcar args)
           args (butlast args)))
-  (bind ((input-stream (if input (uiop:process-info-output input) :stream))
-         (command (cons (fof:path file) (mapcar #'to-argument args)))
-         (directory (uiop:absolute-pathname-p (package-name *package*))))
-    (dynamic-mixins:ensure-mix
-     (uiop:launch-program
-      command
-      :output :stream :error-output *error-output*
-      :input input-stream :directory directory)
-     'result)))
+  (bind ((command (cons (fof:path file) (mapcar #'to-argument args)))
+         (directory (uiop:absolute-pathname-p (package-name *package*)))
+         (process-info
+          (uiop:launch-program
+           command
+           :output :stream :error-output *error-output*
+           :input (if prev-actor (output prev-actor) :stream)
+           :directory directory)))
+    (make-instance 'actor :process-info process-info :output (uiop:process-info-output process-info)
+                          :input (if prev-actor (input prev-actor) (uiop:process-info-input process-info)))))
 
 (defun cd (path)
   (let ((path (to-argument path)))
