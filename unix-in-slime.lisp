@@ -14,8 +14,13 @@
 
 (defun slime-install ()
   (cl-advice:add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
-  (cl-advice:add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook))
+  (cl-advice:add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
+  ;; TODO: is it correct to use the same advice for both?
+  ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
+  ;; I feel like at least one of the two uses is subtlely wrong
+  (cl-advice:add-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-hook))
 (defun slime-uninstall ()
+  (cl-advice:remove-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-hook)
   (cl-advice:remove-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
   (cl-advice:remove-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook))
 (cl-advice:add-advice :after 'install 'slime-install)
