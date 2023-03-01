@@ -46,10 +46,20 @@ Returns the mounted package."
         (t (restart-case (error "Directory ~a does not exist." filename)
              (create-directory ()
                (ensure-directories-exist filename)))))
-  (bind ((package-name (convert-case (namestring filename))))
-    (prog1 (or (find-package package-name)
-               (uiop:ensure-package package-name :mix '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "CL")))
-      (mapc #'mount-file (uiop:directory* (merge-pathnames uiop:*wild-file-for-directory* filename))))))
+  (bind ((package-name (convert-case (namestring filename)))
+         (package (or (find-package package-name)
+                      (uiop:ensure-package
+                       package-name
+                       :mix '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "CL")))))
+    ;; In case the directory is already mounted, check and remove
+    ;; symbols whose mounted file no longer exists
+    (mapc (lambda (symbol)
+            (bind ((value (symbol-value symbol)))
+              (when (and (typep value 'file) (not (fof:exists? value)))
+                (unintern symbol package))))
+          (serapeum:package-exports package))
+    (mapc #'mount-file (uiop:directory* (merge-pathnames uiop:*wild-file-for-directory* filename)))
+    package))
 
 (defun mount-file (filename)
   "Mount FILENAME as a symbol in a Unix FS package mounted to its directory.
@@ -86,6 +96,12 @@ or NIL if PACKAGE is not a UNIX FS package."
         (t (format nil "~a" object))))
 (defmethod to-argument ((object fof:file)) (fof:path object))
 
+(defvar *post-command-hook* (make-instance 'nhooks:hook-void))
+
+(defun remount-current-directory ()
+  (alexandria:when-let (pathname (package-pathname *package*))
+    (mount-directory pathname)))
+
 (defclass actor ()
   ((input :reader input :initarg :input)
    (output :reader output :initarg :output)
@@ -120,6 +136,7 @@ or NIL if PACKAGE is not a UNIX FS package."
            :name "Unix in Lisp REPL Input Copier")))
     (unwind-protect
          (uiop:wait-process (process-info actor))
+      (nhooks:run-hook *post-command-hook*)
       (ignore-errors
        (bt:interrupt-thread input-copier (lambda ()
                                            (ignore-errors (throw 'finish nil))))))
@@ -132,6 +149,7 @@ or NIL if PACKAGE is not a UNIX FS package."
   (unwind-protect
        (prog1 (uiop:slurp-input-stream format (output actor))
          (uiop:wait-process (process-info actor)))
+    (nhooks:run-hook *post-command-hook*)
     (uiop:close-streams (process-info actor))))
 (defmethod content ((file file) &optional (format :string))
   (with-open-file (stream (fof:path file) :direction :input)
@@ -233,6 +251,8 @@ Returns the SYMBOL with shorthand resolved."
            (write-string (package-name (symbol-package object)) stream)
            (write-string (symbol-name object) stream))
           (t (call-next-method))))
+  ;; TODO: something more clever, maybe `fswatch'
+  (nhooks:add-hook *post-command-hook* 'remount-current-directory)
   (values))
 
 (defun uninstall ()
