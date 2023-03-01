@@ -41,6 +41,8 @@ Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/loc
   /Users/kchan> ;; enjoy!
 #+end_src
 
+It's recommended to load ~unix-in-slime.el~ for better Slime integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~.
+
 To undo hacks done to the host environment (currently mostly the reader and printer, for the Unix style slash syntax) and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
 ** Examples
 (Some print-outs are omitted)
