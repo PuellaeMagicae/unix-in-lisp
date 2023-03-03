@@ -3,7 +3,7 @@
 (defun swank-untokenize-symbol-hook (orig package-name internal-p symbol-name)
   (cond ((and (uiop:absolute-pathname-p package-name)
               (not internal-p))
-         (str:concat package-name symbol-name))
+         (concat package-name symbol-name))
         (t (funcall orig package-name internal-p symbol-name))))
 (defun swank-tokenize-symbol-hook (orig string)
   (multiple-value-bind (symbol-name package-name internal-p)

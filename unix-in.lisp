@@ -1,8 +1,8 @@
 (defpackage #:unix-in-lisp
   (:use :cl :named-closure)
   (:import-from :metabang-bind #:bind)
-  (:import-from :serapeum #:lastcar)
-  (:export #:cd #:content #:install #:uninstall))
+  (:import-from :serapeum #:lastcar :concat :package-exports)
+  (:export #:cd #:install #:uninstall))
 (defpackage #:unix-in-lisp.common
   (:use #:unix-in-lisp)
   (:export #:cd #:content))
@@ -15,23 +15,18 @@
   (let ((*print-case* :downcase))
     (format nil "~a" (make-symbol string))))
 
-(defclass file (fof:file)
-  ((symbol :reader file-symbol :initarg :symbol)
-   (package :reader file-package)))
-(defun ensure-executable (file)
-  (let ((symbol (file-symbol file)))
-    (if (fof:executable? file)
-        (setf (symbol-function symbol) (make-execute file))
-        (fmakunbound symbol))))
-(defmethod (setf fof:permissions) :after (permissions (file file))
-  (ensure-executable file))
-(defmethod initialize-instance :after ((file file) &key)
-  (ensure-executable file))
-(defmethod file-package ((file file))
-  (serapeum:ensure (slot-value file 'package)
-    (mount-directory (fof:path file))))
-(defun make-file (filename symbol)
-  (make-instance 'file :path filename :symbol symbol))
+(defun ensure-executable (symbol)
+  (let ((pathname (symbol-pathname symbol)))
+    (if (handler-case
+            (intersection (osicat:file-permissions pathname)
+                          '(:user-exec :group-exec :other-exec))
+          (osicat-posix:enoent ()
+            (warn "Probably broken symlink: ~a" pathname)
+            nil))
+        (setf (symbol-function symbol) (make-execute pathname))
+        (fmakunbound symbol)))
+  symbol)
+
 (defun ensure-pathname (filename)
   "Expand ~ as home directory in FILENAME, and make sure it's absolute."
   (uiop:ensure-pathname (uiop:native-namestring filename) :want-absolute t))
@@ -54,47 +49,47 @@ Returns the mounted package."
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
-            (bind ((value (symbol-value symbol)))
-              (when (and (typep value 'file) (not (fof:exists? value)))
-                (unintern symbol package))))
-          (serapeum:package-exports package))
+            (when (not (uiop:file-exists-p (symbol-pathname symbol)))
+              (unintern symbol package)))
+          (package-exports package))
     (mapc #'mount-file (uiop:directory* (merge-pathnames uiop:*wild-file-for-directory* filename)))
     package))
 
 (defun mount-file (filename)
-  "Mount FILENAME as a symbol in a Unix FS package mounted to its directory.
-The symbol is bounded to a file object tracking attributes of FILENAME.
-Returns two values: the file object and the symbol."
+  "Mount FILENAME as a symbol in the appropriate Unix FS package.
+Returns the mounted self-evaluating symbol."
   (setq filename (ensure-pathname filename))
-  (bind (((:values directory file)
+  (bind (((:values directory-1 file-1)
           (if (uiop:directory-pathname-p filename)
               (values (namestring (make-pathname :directory (butlast (pathname-directory filename))))
                       (lastcar (pathname-directory filename)))
               (values (directory-namestring filename) (file-namestring filename))))
-         (directory (convert-case directory))
-         (file (convert-case file))
+         (directory (convert-case directory-1))
+         (file (convert-case file-1))
          (package (or (find-package directory) (mount-directory directory)))
          (symbol (progn
                    (when (eq (nth-value 1 (find-symbol file package)) :inherited)
                      (shadow (list file) package))
                    (intern file package))))
     (proclaim `(special ,symbol))
-    (export symbol package)
-    (values (setf (symbol-value symbol) (make-file (pathname filename) symbol)) symbol)))
+    (cond ((not (boundp symbol)) (setf (symbol-value symbol) symbol))
+          ((eq (symbol-value symbol) symbol))
+          (t (restart-case
+                 (error "Symbol ~S has previously bound to ~S." symbol (symbol-value symbol))
+               (reckless-continue () :report "Overwrite the binding."
+                 (setf (symbol-value symbol) symbol)))))
+    (export symbol (symbol-package symbol))
+    (when (uiop:file-exists-p filename)
+      (ensure-executable symbol))
+    symbol))
+
 (defun package-pathname (package)
   "Returns the pathname of the directory mounted to PACKAGE,
 or NIL if PACKAGE is not a UNIX FS package."
-  (uiop:absolute-pathname-p (package-name package)))
+  (uiop:absolute-pathname-p (unconvert-case (package-name package))))
 
-(defgeneric to-argument (object)
-  (:documentation
-   "Convert OBJECT into a string suitable for passing to Unix commands."))
-(defmethod to-argument ((object string)) object)
-(defmethod to-argument ((object symbol))
-  (cond ((keywordp object)
-         (serapeum:concat "-" (unconvert-case (symbol-name object))))
-        (t (format nil "~a" object))))
-(defmethod to-argument ((object fof:file)) (fof:path object))
+(defun symbol-pathname (symbol)
+  (uiop:merge-pathnames* (unconvert-case (symbol-name symbol)) (package-pathname (symbol-package symbol))))
 
 (defvar *post-command-hook* (make-instance 'nhooks:hook-void))
 
@@ -102,13 +97,37 @@ or NIL if PACKAGE is not a UNIX FS package."
   (alexandria:when-let (pathname (package-pathname *package*))
     (mount-directory pathname)))
 
-(defclass actor ()
-  ((input :reader input :initarg :input)
-   (output :reader output :initarg :output)
-   (process-info :reader process-info :initarg :process-info)))
-(defun repl-connect (actor)
-  (bind (((:accessors input output) actor)
-         (repl-input *standard-input*)
+(defclass pipeline ()
+  ((input :reader input :initarg :input :type output-stream)
+   (output :reader output :initarg :output :type input-stream)
+   (processes :reader processes :initarg :processes)))
+(defmethod chanl:send ((pipeline pipeline) value &key (blockp t)) ;; TODO: is this correct BLOCKP?
+  (if (eq value 'eof)
+      (close (input pipeline))
+      (progn
+        (princ value (input pipeline))
+        (when blockp (force-output (input pipeline))))))
+(defmethod chanl:recv ((pipeline pipeline) &key (format :line))
+  (case format
+    ((:char) (read-char (output pipeline)))
+    (t (uiop:slurp-input-stream format (output pipeline)))))
+(defun append-process (pipeline process)
+  (if pipeline
+      (with-slots (processes output) pipeline
+        (setq output (uiop:process-info-output process)
+              processes (nconc processes (list process)))
+        pipeline)
+      (make-instance 'pipeline
+                     :input (uiop:process-info-input process)
+                     :output (uiop:process-info-output process)
+                     :processes (list process))))
+(defun wait (pipeline)
+  (mapc #'uiop:wait-process (processes pipeline)))
+(defun close-streams (pipeline)
+  (mapc #'uiop:close-streams (processes pipeline)))
+
+(defun repl-connect (pipeline)
+  (bind ((repl-input *standard-input*)
          (repl-output *standard-output*)
          (output-copier
           (bt:make-thread
@@ -116,84 +135,73 @@ or NIL if PACKAGE is not a UNIX FS package."
              (unwind-protect
                   (loop
                     (handler-case
-                        (write-char (read-char output) repl-output)
+                        (write-char (chanl:recv pipeline :format :char) repl-output)
                       (end-of-file () (return))
                       (stream-error () (return))))
-               (uiop:close-streams (process-info actor))))
+               (close-streams pipeline)))
            :name "Unix in Lisp REPL Output Copier"))
          (input-copier
           (bt:make-thread
            (lambda ()
              (catch 'finish
                (loop
-                 (handler-case
-                     (progn
-                       (write-char (read-char repl-input) input)
-                       (force-output input))
-                   (end-of-file ()
-                     (close input))
-                   (stream-error () (return))))))
+                 (chanl:send pipeline (handler-case
+                                          (read-char repl-input)
+                                        (end-of-file () 'eof)
+                                        (stream-error () (return)))))))
            :name "Unix in Lisp REPL Input Copier")))
     (unwind-protect
-         (uiop:wait-process (process-info actor))
+         (wait pipeline)
       (nhooks:run-hook *post-command-hook*)
       (ignore-errors
        (bt:interrupt-thread input-copier (lambda ()
                                            (ignore-errors (throw 'finish nil))))))
     (values)))
-(defmethod print-object ((object actor) stream)
+(defmethod print-object ((object pipeline) stream)
   (repl-connect object))
 
-(defgeneric content (object &optional format))
-(defmethod content ((actor actor) &optional (format :string))
-  (unwind-protect
-       (prog1 (uiop:slurp-input-stream format (output actor))
-         (uiop:wait-process (process-info actor)))
-    (nhooks:run-hook *post-command-hook*)
-    (uiop:close-streams (process-info actor))))
-(defmethod content ((file file) &optional (format :string))
-  (with-open-file (stream (fof:path file) :direction :input)
-    (uiop:slurp-input-stream format stream)))
+(defgeneric to-argument (object)
+  (:method ((string string)) string)
+  (:method ((symbol symbol))
+    (if (keywordp symbol)
+        (format nil "-~A" symbol)
+        (format nil "~A" symbol))))
 
-(defnclo execute (file) (&rest args &aux prev-actor)
-  (when (typep (lastcar args) 'actor)
-    (setq prev-actor (lastcar args)
+(defnclo execute (filename) (&rest args &aux pipeline)
+  (when (typep (lastcar args) 'pipeline)
+    (setq pipeline (lastcar args)
           args (butlast args)))
-  (bind ((command (cons (fof:path file) (mapcar #'to-argument args)))
+  (bind ((command (cons filename (mapcar #'to-argument args)))
          (directory (uiop:absolute-pathname-p (package-name *package*)))
-         (process-info
+         (process
           (uiop:launch-program
            command
            :output :stream :error-output *error-output*
-           :input (if prev-actor (output prev-actor) :stream)
+           :input (if pipeline (output pipeline) :stream)
            :directory directory)))
-    (make-instance 'actor :process-info process-info :output (uiop:process-info-output process-info)
-                          :input (if prev-actor (input prev-actor) (uiop:process-info-input process-info)))))
+    (append-process pipeline process)))
 
 (defun cd (path)
-  (let ((path (to-argument path)))
-    (setq *package* (mount-directory path))))
+  (setq *package* (mount-directory (to-argument path))))
 
 (defun convert-symbol (symbol package)
   "Recognize shorthands when reading SYMBOL in PACKAGE.
 Returns the SYMBOL with shorthand resolved."
   (cond ((not (eq (symbol-package symbol) package)) symbol)
-        ((equal (symbol-name symbol) "~") (nth-value 1 (mount-file "~/")))
+        ((equal (symbol-name symbol) "~") (mount-file "~/"))
         ((uiop:absolute-pathname-p (symbol-name symbol))
-            (nth-value 1 (mount-file (symbol-name symbol))))
-        ((and (package-pathname package)
-              (find (uiop:directory-separator-for-host) (symbol-name symbol)))
-         (nth-value 1 (mount-file (uiop:ensure-pathname
-                                   (symbol-name symbol)
-                                   :defaults (pathname (package-name package))
-                                   :ensure-absolute t))))
+         (mount-file (symbol-name symbol)))
+        ((package-pathname package)
+         (mount-file (uiop:merge-pathnames* (unconvert-case (symbol-name symbol)) (package-pathname package))))
         (t symbol)))
 
-(defun intern-hook (orig &rest args)
-  (bind ((old (apply orig args))
-         (new (convert-symbol old *package*)))
-    (unless (eq new old) (unintern old))
-    new))
+(defvar *inhibit-intern-hook* nil)
+(defun intern-hook (orig &rest args &aux (old (apply orig args)))
+  (if *inhibit-intern-hook* old
+      (bind ((*inhibit-intern-hook* t)
+             (new (convert-symbol old *package*)))
+        (unless (eq new old) (unintern old))
+        new)))
 
 (defun dot-read-macro (stream char)
   (flet ((delimiter-p (c)
@@ -223,18 +231,19 @@ Returns the SYMBOL with shorthand resolved."
                (standard-read))))
         (progn (unread char)
                (standard-read)))))
+
 (named-readtables:defreadtable readtable
   (:merge :standard)
   (:macro-char #\. 'dot-read-macro t)
   (:case :invert))
 
 (defun install ()
-  (named-readtables:in-readtable readtable)
   (when (find-package "UNIX-IN-LISP.PATH")
     (restart-case
         (error "There seems to be a previous Unix in Lisp installation.")
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
+  (named-readtables:in-readtable readtable)
   (trivial-package-locks:without-package-locks
     (let ((intern #-sbcl 'intern #+sbcl 'sb-impl::%intern))
       (cl-advice:add-advice :around intern 'intern-hook)))
@@ -244,12 +253,12 @@ Returns the SYMBOL with shorthand resolved."
   (let ((packages (mapcar #'mount-directory (uiop:getenv-pathnames "PATH"))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
   (defmethod print-object :around ((object symbol) stream)
-    (cond ((eq object (find-symbol (symbol-name object) *package*))
+    (cond ((eq (symbol-package object) *package*)
            (call-next-method))
           ((not (symbol-package object)) (call-next-method))
           ((package-pathname (symbol-package object))
-           (write-string (package-name (symbol-package object)) stream)
-           (write-string (symbol-name object) stream))
+           (write-string (convert-case (package-name (symbol-package object))) stream)
+           (write-string (convert-case (symbol-name object)) stream))
           (t (call-next-method))))
   ;; TODO: something more clever, maybe `fswatch'
   (nhooks:add-hook *post-command-hook* 'remount-current-directory)
