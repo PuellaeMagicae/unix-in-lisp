@@ -53,4 +53,3 @@ But why not the Lisp way as well!
   /Users/kchan/quicklisp/local-projects/unix-in-lisp> (length (serapeum:package-exports))
   9
 #+end_src
-
