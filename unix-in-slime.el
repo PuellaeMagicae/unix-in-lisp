@@ -42,22 +42,26 @@
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp."
   (interactive)
-  (slime-enable-contrib 'slime-mrepl)
-  (let ((channel (slime-make-channel slime-listener-channel-methods)))
-    (slime-eval-async
-        `(swank-mrepl:create-mrepl ,(slime-channel.id channel))
-      (slime-rcurry
-       (lambda (result channel)
-         (cl-destructuring-bind (remote thread-id package prompt) result
-           (pop-to-buffer (generate-new-buffer (slime-buffer-name :mrepl)))
-           (slime-mrepl-mode)
-           (setq slime-current-thread thread-id)
-           (setq slime-buffer-connection (slime-connection))
-           (set (make-local-variable 'slime-mrepl-remote-channel) remote)
-           (slime-channel-put channel 'buffer (current-buffer))
-           (slime-mrepl-send `(:process "(unix-in-lisp:setup)"))
-           (slime-channel-send channel `(:prompt ,package ,prompt))))
-       channel))))
+  (if (slime-connected-p)
+      (progn
+        (slime-eval '(asdf:load-system "unix-in-lisp"))
+        (slime-enable-contrib 'slime-mrepl)
+        (let ((channel (slime-make-channel slime-listener-channel-methods)))
+          (slime-eval-async
+              `(swank-mrepl:create-mrepl ,(slime-channel.id channel))
+            (slime-rcurry
+             (lambda (result channel)
+               (cl-destructuring-bind (remote thread-id package prompt) result
+                 (pop-to-buffer (generate-new-buffer (slime-buffer-name :mrepl)))
+                 (slime-mrepl-mode)
+                 (setq slime-current-thread thread-id)
+                 (setq slime-buffer-connection (slime-connection))
+                 (set (make-local-variable 'slime-mrepl-remote-channel) remote)
+                 (slime-channel-put channel 'buffer (current-buffer))
+                 (slime-mrepl-send `(:process "(unix-in-lisp:setup)"))
+                 (slime-channel-send channel `(:prompt ,package ,prompt))))
+             channel))))
+      (save-excursion (slime-start :init-function #'unix-in-slime))))
 
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here
