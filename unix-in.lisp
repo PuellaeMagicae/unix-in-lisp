@@ -288,6 +288,7 @@ Returns the SYMBOL with shorthand resolved."
   (named-readtables:in-readtable readtable)
   (setq *debugger-hook* (cl-advice:ensure-advisable-function *debugger-hook*))
   (cl-advice:add-advice :around *debugger-hook* 'debug-hook)
+  (cd "~/")
   (values))
 
 (defun uninstall ()
