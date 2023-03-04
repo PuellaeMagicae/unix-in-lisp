@@ -38,5 +38,11 @@
     (comint-carriage-motion slime-output-start slime-output-end)
     (ansi-color-apply-on-region slime-output-start slime-output-end)))
 
+(require 'slime-mrepl)
+(defun unix-in-slime ()
+  "Create a SLIME listener running Unix in Lisp."
+  (interactive)
+  (slime-new-mrepl ))
+
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here

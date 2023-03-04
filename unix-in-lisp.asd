@@ -1,6 +1,6 @@
 (asdf:defsystem unix-in-lisp
   :depends-on (:named-closure
-               :chanl :osicat :metabang-bind
+               :osicat :metabang-bind :ppath
                :trivial-package-locks :named-readtables
                :cl-advice :nhooks)
   :components ((:file "unix-in")
