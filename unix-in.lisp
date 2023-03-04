@@ -128,49 +128,60 @@ or NIL if PACKAGE is not a UNIX FS package."
   (mapc #'uiop:close-streams (processes pipeline)))
 (defun alive (pipeline)
   (some #'uiop:process-alive-p (processes pipeline)))
-
+(defvar *interactive-streams* nil)
+(defvar *interactive-stream-forcer* nil)
+(defun ensure-stream-forcer ()
+  (unless (and *interactive-stream-forcer*
+               (bt:thread-alive-p *interactive-stream-forcer*))
+    (let (#+swank (connection swank::*emacs-connection*))
+      (setq *interactive-stream-forcer*
+            (bt:make-thread
+             (lambda ()
+               (#+swank swank::with-connection #+swank (connection)
+                #-swank progn
+                (loop
+                  (sleep 0.1)
+                  (mapc
+                   (lambda (stream)
+                     (handler-case
+                         (force-output stream)
+                       (stream-error ()
+                         (setq *interactive-streams* (delete stream *interactive-streams*)))))
+                   *interactive-streams*))))
+             :name "Unix in Lisp REPL Stream Forcer")))))
+(defun add-interactive-stream (stream)
+  (ensure-stream-forcer)
+  (pushnew stream *interactive-streams*))
+(defun stream-copier (input output cont)
+  (let (#+swank (connection swank::*emacs-connection*))
+    (lambda ()
+      (#+swank swank::with-connection #+swank (connection)
+       #-swank progn
+       (unwind-protect
+            (loop
+              (handler-case
+                  (write-char (read-char input) output)
+                (end-of-file () (close output) (return))
+                (stream-error () (return))))
+         (funcall cont))))))
 (defun repl-connect (pipeline)
-  (bind ((repl-output *standard-output*)
-         (repl-thread (bt:current-thread))
-         #+swank (connection swank::*emacs-connection*))
+  (let ((repl-thread (bt:current-thread)))
+    (add-interactive-stream (input pipeline))
+    (add-interactive-stream *standard-output*)
     (bt:make-thread
-     (lambda ()
-       (#+swank swank::with-connection #+swank (connection)
-        #-swank progn
-        (loop
-          (sleep 0.1)
-          (force-output repl-output)
-          (handler-case
-              (force-output (input pipeline))
-            (stream-error () (return))))))
-     :name "Unix in Lisp REPL Stream Forcer")
-    (bt:make-thread
-     (lambda ()
-       (#+swank swank::with-connection #+swank (connection)
-        #-swank progn
-         (unwind-protect
-              (loop
-                (handler-case
-                    (write-char (read-char (output pipeline)) repl-output)
-                  (end-of-file () (return))
-                  (stream-error () (return))))
-           (close-streams pipeline)
-           (bt:interrupt-thread
-            repl-thread
-            (lambda () (ignore-errors (throw 'finish nil)))))))
+     (stream-copier
+      (output pipeline) *standard-output*
+      (lambda ()
+        (close-streams pipeline)
+        (bt:interrupt-thread
+         repl-thread
+         (lambda () (ignore-errors (throw 'finish nil))))))
      :name "Unix in Lisp REPL Output Copier")
-    (unwind-protect
-         (catch 'finish
-           (loop
-             (handler-case
-                 (progn
-                   (write-char (read-char) (input pipeline))
-                   (force-output (input pipeline)))
-               (end-of-file ()
-                 (close (input pipeline)))
-               (stream-error () (return))))
-           (wait pipeline))
-      (nhooks:run-hook *post-command-hook*))
+    (catch 'finish
+      (funcall (stream-copier *standard-input* (input pipeline)
+                              (lambda ()
+                                (wait pipeline)
+                                (nhooks:run-hook *post-command-hook*)))))
     (values)))
 (defmethod print-object ((object pipeline) stream)
   (repl-connect object))
@@ -184,9 +195,13 @@ or NIL if PACKAGE is not a UNIX FS package."
          (process
           (uiop:launch-program
            command
-           :output :stream :error-output *error-output*
+           :output :stream :error-output :stream
            :input (if pipeline (output pipeline) :stream)
            :directory directory)))
+    (bt:make-thread
+     (stream-copier (uiop:process-info-error-output process) *standard-output*
+                    (lambda ()))
+     :name (format nil "~A Error Output Copier" filename))
     (append-process pipeline process)))
 
 (defun cd (path)
