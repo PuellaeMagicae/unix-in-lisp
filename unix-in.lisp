@@ -148,7 +148,7 @@ or NIL if PACKAGE is not a UNIX FS package."
                        (stream-error ()
                          (setq *interactive-streams* (delete stream *interactive-streams*)))))
                    *interactive-streams*))))
-             :name "Unix in Lisp REPL Stream Forcer")))))
+             :name "Unix in Lisp Stream Forcer")))))
 (defun add-interactive-stream (stream)
   (ensure-stream-forcer)
   (pushnew stream *interactive-streams*))
