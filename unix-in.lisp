@@ -130,6 +130,15 @@ or NIL if PACKAGE is not a UNIX FS package."
   (some #'uiop:process-alive-p (processes pipeline)))
 (defvar *interactive-streams* nil)
 (defvar *interactive-stream-forcer* nil)
+(defun stream-forcer ()
+  (sb-sys:serve-event 0.1)
+  (mapc
+   (lambda (stream)
+     (handler-case
+         (force-output stream)
+       (stream-error ()
+         (setq *interactive-streams* (delete stream *interactive-streams*)))))
+   *interactive-streams*))
 (defun ensure-stream-forcer ()
   (unless (and *interactive-stream-forcer*
                (bt:thread-alive-p *interactive-stream-forcer*))
@@ -139,15 +148,7 @@ or NIL if PACKAGE is not a UNIX FS package."
              (lambda ()
                (#+swank swank::with-connection #+swank (connection)
                 #-swank progn
-                (loop
-                  (sleep 0.1)
-                  (mapc
-                   (lambda (stream)
-                     (handler-case
-                         (force-output stream)
-                       (stream-error ()
-                         (setq *interactive-streams* (delete stream *interactive-streams*)))))
-                   *interactive-streams*))))
+                (loop (stream-forcer))))
              :name "Unix in Lisp Stream Forcer")))))
 (defun add-interactive-stream (stream)
   (ensure-stream-forcer)
@@ -202,6 +203,7 @@ or NIL if PACKAGE is not a UNIX FS package."
      (stream-copier (uiop:process-info-error-output process) *standard-output*
                     (lambda ()))
      :name (format nil "~A Error Output Copier" filename))
+    (add-interactive-stream *standard-output*)
     (append-process pipeline process)))
 
 (defun cd (path)

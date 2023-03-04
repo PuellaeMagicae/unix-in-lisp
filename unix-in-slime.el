@@ -39,9 +39,11 @@
     (ansi-color-apply-on-region slime-output-start slime-output-end)))
 
 (require 'slime-mrepl)
+
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp."
   (interactive)
+  (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
   (if (slime-connected-p)
       (progn
         (slime-eval '(asdf:load-system "unix-in-lisp"))
@@ -54,6 +56,8 @@
                (cl-destructuring-bind (remote thread-id package prompt) result
                  (pop-to-buffer (generate-new-buffer (slime-buffer-name :mrepl)))
                  (slime-mrepl-mode)
+                 (run-hooks 'slime-repl-mode-hook)
+                 (setq-local comint-inhibit-carriage-motion nil)
                  (setq slime-current-thread thread-id)
                  (setq slime-buffer-connection (slime-connection))
                  (set (make-local-variable 'slime-mrepl-remote-channel) remote)
