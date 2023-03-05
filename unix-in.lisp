@@ -26,7 +26,7 @@ for `package-name's and `symbol-name's."
           (osicat-posix:enoent ()
             (warn "Probably broken symlink: ~a" filename)
             nil))
-        (setf (symbol-function symbol) (make-execute filename))
+        (setf (macro-function symbol) #'command-macro)
         (fmakunbound symbol)))
   symbol)
 
@@ -68,17 +68,26 @@ Returns the mounted package."
                         (merge-pathnames uiop:*wild-file-for-directory* (to-dir filename))))
     package))
 
+(defun ensure-homed-symbol (symbol-name package)
+  (let ((symbol (find-symbol symbol-name package)))
+    (cond ((not symbol) (intern symbol-name package))
+          ((eq (symbol-package symbol) package) symbol)
+          (t (let ((use-list (package-use-list package)))
+               (unwind-protect
+                    (progn
+                      (mapc (lambda (p) (unuse-package p package)) use-list)
+                      (unintern symbol package)
+                      (shadow (list symbol-name) package)
+                      (intern symbol-name package))
+                 (mapc (lambda (p) (use-package p package)) use-list)))))))
+
 (defun mount-file (filename)
   "Mount FILENAME as a symbol in the appropriate Unix FS package.
 Returns the mounted self-evaluating symbol."
   (setq filename (ensure-path filename))
   (bind (((directory . file) (ppath:split filename))
          (package (or (find-package (convert-case directory)) (mount-directory directory)))
-         (symbol-name (convert-case file))
-         (symbol (progn
-                   (when (eq (nth-value 1 (find-symbol symbol-name package)) :inherited)
-                     (shadow (list symbol-name) package))
-                   (intern symbol-name package))))
+         (symbol (ensure-homed-symbol (convert-case file) package)))
     (proclaim `(special ,symbol))
     (cond ((not (boundp symbol)) (setf (symbol-value symbol) symbol))
           ((eq (symbol-value symbol) symbol))
@@ -122,9 +131,8 @@ or NIL if PACKAGE is not a UNIX FS package."
                      :output (uiop:process-info-output process)
                      :processes (list process))))
 
-(defun wait (pipeline)
-  (mapc #'uiop:wait-process (processes pipeline)))
-(defun close-streams (pipeline)
+(defun teardown (pipeline)
+  (mapc #'uiop:wait-process (processes pipeline))
   (mapc #'uiop:close-streams (processes pipeline)))
 (defun alive (pipeline)
   (some #'uiop:process-alive-p (processes pipeline)))
@@ -162,7 +170,7 @@ or NIL if PACKAGE is not a UNIX FS package."
             (loop
               (handler-case
                   (write-char (read-char input) output)
-                (end-of-file () (close output) (return))
+                (end-of-file () (return))
                 (stream-error () (return))))
          (funcall cont))))))
 (defun repl-connect (pipeline)
@@ -173,7 +181,6 @@ or NIL if PACKAGE is not a UNIX FS package."
      (stream-copier
       (output pipeline) *standard-output*
       (lambda ()
-        (close-streams pipeline)
         (bt:interrupt-thread
          repl-thread
          (lambda () (ignore-errors (throw 'finish nil))))))
@@ -181,13 +188,15 @@ or NIL if PACKAGE is not a UNIX FS package."
     (catch 'finish
       (funcall (stream-copier *standard-input* (input pipeline)
                               (lambda ()
-                                (wait pipeline)
+                                (close (input pipeline))
+                                (teardown pipeline)
                                 (nhooks:run-hook *post-command-hook*)))))
     (values)))
 (defmethod print-object ((object pipeline) stream)
   (repl-connect object))
 
-(defnclo execute (filename) (&rest args &aux pipeline)
+(defun execute-command (filename &rest args &aux pipeline)
+  (setq filename (ensure-path filename))
   (when (typep (lastcar args) 'pipeline)
     (setq pipeline (lastcar args)
           args (butlast args)))
@@ -205,7 +214,10 @@ or NIL if PACKAGE is not a UNIX FS package."
      :name (format nil "~A Error Output Copier" filename))
     (add-interactive-stream *standard-output*)
     (append-process pipeline process)))
-
+(defun command-macro (form env)
+  (declare (ignore env))
+  (bind (((command . args) form))
+    `(apply #'execute-command ',command ,(list 'fare-quasiquote:quasiquote args))))
 (defun cd (path)
   (setq *package* (mount-directory path)))
 
@@ -220,14 +232,6 @@ Returns the SYMBOL with shorthand resolved."
               (find ppath.details.constants:+separator+ (symbol-name symbol)))
          (mount-file (symbol-path symbol)))
         (t symbol)))
-
-(defvar *inhibit-intern-hook* nil)
-(defun intern-hook (orig &rest args &aux (old (apply orig args)))
-  (if *inhibit-intern-hook* old
-      (bind ((*inhibit-intern-hook* t)
-             (new (convert-symbol old *package*)))
-        (unless (eq new old) (unintern old))
-        new)))
 
 (defun dot-read-macro (stream char)
   (flet ((delimiter-p (c)
@@ -259,21 +263,26 @@ Returns the SYMBOL with shorthand resolved."
                (standard-read)))))
 
 (named-readtables:defreadtable readtable
-  (:merge :standard)
+  (:merge :fare-quasiquote)
   (:macro-char #\. 'dot-read-macro t)
   (:case :invert))
 
 (defvar *suppress-unbound-variable* t)
-
 (defun debug-hook (orig condition hook)
-  (if (and (typep condition 'unbound-variable)
-           *suppress-unbound-variable*
-           (package-path *package*))
-      (invoke-restart 'use-value (cell-error-name condition))
-      (funcall orig condition hook)))
+  (when (and (typep condition 'unbound-variable)
+             *suppress-unbound-variable*)
+    (let ((symbol (convert-symbol (cell-error-name condition) *package*)))
+      (when (boundp symbol)
+        (invoke-restart 'use-value (symbol-value symbol)))))
+  (funcall orig condition hook))
+
+(defun unquote-reader-hook (orig thunk)
+  (if (and (eq *readtable* (named-readtables:find-readtable 'readtable))
+           (= fare-quasiquote::*quasiquote-level* 0))
+      (let ((fare-quasiquote::*quasiquote-level* 1)) (funcall orig thunk))
+      (funcall orig thunk)))
 
 (defun installed-p () (find-package "UNIX-IN-LISP.PATH"))
-
 (defun install ()
   (when (installed-p)
     (restart-case
@@ -281,24 +290,22 @@ Returns the SYMBOL with shorthand resolved."
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
   (named-readtables:in-readtable readtable)
-  (trivial-package-locks:without-package-locks
-    (let ((intern #-sbcl 'intern #+sbcl 'sb-impl::%intern))
-      (cl-advice:add-advice :around intern 'intern-hook)))
   ;; Make UNIX-IN-LISP.PATH first because FS packages in PATH will
   ;; circularly reference UNIX-IN-LISP.PATH
   (make-package "UNIX-IN-LISP.PATH")
   (let ((packages (mapcar #'mount-directory (uiop:getenv-pathnames "PATH"))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
   (defmethod print-object :around ((symbol symbol) stream)
-    (cond ((eq (symbol-package symbol) *package*) (call-next-method))
+    (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
           ((not (symbol-package symbol)) (call-next-method))
           ((package-path (symbol-package symbol))
            (write-string (symbol-path symbol) stream))
           (t (call-next-method))))
   ;; TODO: something more clever, maybe `fswatch'
   (nhooks:add-hook *post-command-hook* 'remount-current-directory)
+  (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
+  (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
   (values))
-
 (defun setup ()
   (unless (installed-p)
     (install))
@@ -319,8 +326,5 @@ Returns the SYMBOL with shorthand resolved."
    (list-all-packages))
   (when (find-package "UNIX-IN-LISP.PATH")
     (delete-package "UNIX-IN-LISP.PATH"))
-  (trivial-package-locks:without-package-locks
-    (let ((intern #-sbcl 'intern #+sbcl 'sb-impl::%intern))
-      (cl-advice:remove-advice :around intern 'intern-hook)))
   (named-readtables:in-readtable :standard)
   (values))
