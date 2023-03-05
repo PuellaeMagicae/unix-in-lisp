@@ -1,14 +1,13 @@
 (in-package #:unix-in-lisp)
 
 (defun swank-untokenize-symbol-hook (orig package-name internal-p symbol-name)
-  (cond ((and (uiop:absolute-pathname-p package-name)
-              (not internal-p))
+  (cond ((and (ppath:isabs package-name) (not internal-p))
          (concat package-name symbol-name))
         (t (funcall orig package-name internal-p symbol-name))))
 (defun swank-tokenize-symbol-hook (orig string)
   (multiple-value-bind (symbol-name package-name internal-p)
       (funcall orig string)
-    (cond ((and (not package-name) (uiop:absolute-pathname-p symbol-name))
+    (cond ((and (not package-name) (ppath:isabs symbol-name))
            (values (file-namestring symbol-name) (directory-namestring symbol-name) nil))
           (t (values symbol-name package-name internal-p)))))
 
