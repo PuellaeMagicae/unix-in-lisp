@@ -2,20 +2,23 @@
 Directories are mapped as /Unix  FS packages/. Unix FS packages is any Common Lisp package whose package name designate an absolute pathname (as in ~uiop:absolute-pathname-p~).
 
 The exported symbols of a Unix FS package should one-to-one correspond to files in the mapped directory. Exceptions to this one-to-one correspondence:
-- When using ~directory/file~ to access a non-existent ~file~, the symbol ~file~ is interned and exported for ~directory~ rather than signaling an error. This is to work better with commands expecting a non-existent path, e.g. ~mv directory/existent-file directory/not-yet-existent-file~.
 - Because of the limit of file system change tracking, the package structure in the Common Lisp image may diverge from the Unix FS state.
   - Currently, the state of a Unix FS package is synchronized when calling ~mount-directory~. By default, ~remount-current-directory~ is added to ~*post-command-hook*~, which does the obvious thing.
-
-Unix in Lisp overrides ~*debugger-hook*~ to make it easier to type non-existent paths and command arguments in the REPL. When ~*package*~ is found to be a Unix FS package, we automatically invoke ~use-value~ restart for ~unbound-variable~ conditions so that symbols seems to be /self-evaluating/. This behavior can be customized or dynamically override via ~*suppress-unbound-variable*~.
-
-#+begin_src
-/Users/kchan> --ignore-errors
---ignore-errors
-#+end_src
 
 * Command and Process Mapping
 /Effective processes/ are represented by instance of ~pipeline~ class. Effective processes include regular Unix processes, and pipeline made from several processes.
 
-~pipeline~ are valid ~chanl~ channels. You can call ~send~ and ~recv~ on them. These methods accept an additional  ~:format~ argument, comparing to those for native ~chanl~ channels, which specify the granularity of the messages. By default, ~:line~ is used.
+When Unix in Lisp maps a directory, files are checked for execution permission and executable ones are mapped as Common Lisp macros.  These macros /implicitly quasiquotes/ their arguments. The arguments are converted to strings using ~to-argument~, then passed to the corresponding executable, with one exception: If the last argument is an effective process, the current process being created  is chained after the effective process via Unix pipes. The combined effective process is returned.
 
-When Unix in Lisp maps a directory, files are checked for execution permission and executable ones are mapped as Common Lisp functions. These functions process their arguments using ~to-argument~ before pass to the corresponding executable, with one exception: If the last argument is an effective process, the current process being created  is chained after the effective process via Unix pipes. The combined effective process is returned.
+Examples of using macros mapped from Unix commands
+#+begin_src 
+  /Users/kchan/some-documents> (cat ,@(contents (ls) :lines))
+  ;; This cats together all files under current directory.
+#+end_src
+
+When ~to-argument~ sees a list, it converts its elements recursively and then concat them together. Hopefully it makes (manually or programmatically) writing structured command arguments easier
+
+#+begin_src 
+  /Users/kchan/some-repo> (configure (--prefix= ,*my-prefered-prefix*))
+  ;; Similar to posix shell: configure --prefix=$MY-PREFERED-PREFIX
+#+end_src

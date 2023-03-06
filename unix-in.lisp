@@ -1,12 +1,12 @@
-(defpackage #:unix-in-lisp
+(uiop:define-package #:unix-in-lisp
   (:use :cl :named-closure)
   (:import-from :metabang-bind #:bind)
-  (:import-from :serapeum #:lastcar :concat :package-exports)
+  (:import-from :serapeum #:lastcar :concat :package-exports #:-> #:mapconcat)
   (:import-from :alexandria #:when-let #:if-let)
-  (:export #:cd #:install #:uninstall #:setup #:*suppress-unbound-variable*))
-(defpackage #:unix-in-lisp.common
+  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents))
+(uiop:define-package #:unix-in-lisp.common
   (:use #:unix-in-lisp)
-  (:export #:cd))
+  (:export #:cd #:contents))
 (in-package #:unix-in-lisp)
 
 (defun convert-case (string)
@@ -30,30 +30,61 @@ for `package-name's and `symbol-name's."
         (fmakunbound symbol)))
   symbol)
 
-(defun ensure-path (filename)
-  "Expand ~ as home directory in FILENAME, and make sure it's absolute.
-Trailing slashes are stripped."
-  (cond ((pathnamep filename)
-         (setq filename (uiop:native-namestring filename)))
-        ((symbolp filename)
-         (setq filename (symbol-path filename))))
-  (let ((path (ppath:expanduser (ppath:normpath filename))))
+(defun package-path (package)
+  "Returns the namestring of the directory mounted to PACKAGE,
+or NIL if PACKAGE is not a UNIX FS package."
+  (let ((filename (unconvert-case (package-name package))))
+    (when (ppath:isabs filename) filename)))
+
+(defun symbol-path (symbol)
+  "Returns the namestring of the file mounted to SYMBOL,
+Signals an error if the home package SYMBOL is not a Unix FS package.
+
+Note that SYMBOL must be the canonical mounted symbol, to retrieve the
+path designated by a symbol, consider using `ensure-path'."
+  (if-let (dir (package-path (symbol-package symbol)))
+    (ppath:join dir (unconvert-case (symbol-name symbol)))
+    (error "Home package ~S of ~S is not a Unix FS package."
+           (symbol-package symbol) symbol)))
+
+(-> canonical-symbol (symbol) symbol)
+(defun canonical-symbol (symbol)
+  "Returns the symbol mounted to the path designated by SYMBOL.
+This mounts the symbol in the process and may also mount required Unix
+FS packages."
+  (cond ((equal (symbol-name symbol) "~") (mount-file "~/"))
+        ((ppath:isabs (symbol-name symbol))
+         (mount-file (unconvert-case (symbol-name symbol))))
+        ((package-path (symbol-package symbol))
+         (mount-file (symbol-path symbol)))
+        (t (error "~S does not designate a Unix path." symbol))))
+
+(-> ensure-path (t) string)
+(defun ensure-path (path)
+  "Return the path (a string) designated by PATH."
+  (cond ((pathnamep path)
+         (setq path (uiop:native-namestring path)))
+        ((symbolp path)
+         (setq path (symbol-path (canonical-symbol path)))))
+  (let ((path (ppath:expanduser (ppath:normpath path))))
     (unless (ppath:isabs path)
-      (error "~S is not an absolute path." filename))
+      (error "~S is not an absolute path." path))
     path))
+
 (defun to-dir (filename) (ppath:join filename ""))
 
-(defun mount-directory (filename)
-  "Mount FILENAME as a Unix FS package, which must but a directory.
-Returns the mounted package."
-  (setq filename (ensure-path filename))
-  (cond ((ppath:isdir filename))
-        ((ppath:lexists filename)
-         (error "~a is not a directory." filename))
-        (t (restart-case (error "Directory ~a does not exist." filename)
+(-> mount-directory (t) package)
+(defun mount-directory (path)
+  "Mount PATH as a Unix FS package, which must but a directory.
+Return the mounted package."
+  (setq path (ensure-path path))
+  (cond ((ppath:isdir path))
+        ((ppath:lexists path)
+         (error "~a is not a directory." path))
+        (t (restart-case (error "Directory ~a does not exist." path)
              (create-directory ()
-               (ensure-directories-exist (to-dir filename))))))
-  (bind ((package-name (convert-case filename))
+               (ensure-directories-exist (to-dir path))))))
+  (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
                       (uiop:ensure-package
                        package-name
@@ -65,10 +96,13 @@ Returns the mounted package."
               (unintern symbol package)))
           (package-exports package))
     (mapc #'mount-file (uiop:directory*
-                        (merge-pathnames uiop:*wild-file-for-directory* (to-dir filename))))
+                        (merge-pathnames uiop:*wild-file-for-directory* (to-dir path))))
     package))
 
+(-> ensure-homed-symbol (string package) symbol)
 (defun ensure-homed-symbol (symbol-name package)
+  "Make a symbol with PACKAGE as home package.
+Return the symbol."
   (let ((symbol (find-symbol symbol-name package)))
     (cond ((not symbol) (intern symbol-name package))
           ((eq (symbol-package symbol) package) symbol)
@@ -81,6 +115,7 @@ Returns the mounted package."
                       (intern symbol-name package))
                  (mapc (lambda (p) (use-package p package)) use-list)))))))
 
+(-> mount-file (t) symbol)
 (defun mount-file (filename)
   "Mount FILENAME as a symbol in the appropriate Unix FS package.
 Returns the mounted self-evaluating symbol."
@@ -100,21 +135,14 @@ Returns the mounted self-evaluating symbol."
       (ensure-executable symbol))
     symbol))
 
-(defun package-path (package)
-  "Returns the namestring of the directory mounted to PACKAGE,
-or NIL if PACKAGE is not a UNIX FS package."
-  (let ((filename (unconvert-case (package-name package))))
-    (when (ppath:isabs filename) filename)))
-
-(defun symbol-path (symbol)
-  (ppath:join (package-path (symbol-package symbol))
-              (unconvert-case (symbol-name symbol))))
-
-(defvar *post-command-hook* (make-instance 'nhooks:hook-void))
-
 (defun remount-current-directory ()
   (when-let (pathname (package-path *package*))
     (mount-directory pathname)))
+
+;; TODO: something more clever, maybe `fswatch'
+(defvar *post-command-hook*
+  (make-instance 'nhooks:hook-void
+                 :handlers '(remount-current-directory)))
 
 (defclass pipeline ()
   ((input :reader input :initarg :input :type output-stream)
@@ -139,7 +167,8 @@ or NIL if PACKAGE is not a UNIX FS package."
 (defvar *interactive-streams* nil)
 (defvar *interactive-stream-forcer* nil)
 (defun stream-forcer ()
-  (sb-sys:serve-event 0.1)
+  "Loop body to run in Stream Forcer thread."
+  (sleep 0.1)
   (mapc
    (lambda (stream)
      (handler-case
@@ -195,6 +224,16 @@ or NIL if PACKAGE is not a UNIX FS package."
 (defmethod print-object ((object pipeline) stream)
   (repl-connect object))
 
+(defgeneric contents (object &optional format))
+(defmethod contents ((pipeline pipeline) &optional (format :string))
+  (unwind-protect (uiop:slurp-input-stream format (output pipeline))
+    (teardown pipeline)))
+
+(defgeneric to-argument (object)
+  (:method ((symbol symbol))  (princ-to-string symbol))
+  (:method ((string string)) string)
+  (:method ((cons cons)) (mapconcat #'to-argument cons "")))
+
 (defun execute-command (filename &rest args &aux pipeline)
   (setq filename (ensure-path filename))
   (when (typep (lastcar args) 'pipeline)
@@ -218,20 +257,9 @@ or NIL if PACKAGE is not a UNIX FS package."
   (declare (ignore env))
   (bind (((command . args) form))
     `(apply #'execute-command ',command ,(list 'fare-quasiquote:quasiquote args))))
+
 (defun cd (path)
   (setq *package* (mount-directory path)))
-
-(defun convert-symbol (symbol package)
-  "Recognize shorthands when reading SYMBOL in PACKAGE.
-Returns the SYMBOL with shorthand resolved."
-  (cond ((not (eq (symbol-package symbol) package)) symbol)
-        ((equal (symbol-name symbol) "~") (mount-file "~/"))
-        ((ppath:isabs (symbol-name symbol))
-         (mount-file (unconvert-case (symbol-name symbol))))
-        ((and (package-path package)
-              (find ppath.details.constants:+separator+ (symbol-name symbol)))
-         (mount-file (symbol-path symbol)))
-        (t symbol)))
 
 (defun dot-read-macro (stream char)
   (flet ((delimiter-p (c)
@@ -267,26 +295,17 @@ Returns the SYMBOL with shorthand resolved."
   (:macro-char #\. 'dot-read-macro t)
   (:case :invert))
 
-(defvar *suppress-unbound-variable* t)
-(defun debug-hook (orig condition hook)
-  (when (and (typep condition 'unbound-variable)
-             *suppress-unbound-variable*)
-    (let ((symbol (convert-symbol (cell-error-name condition) *package*)))
-      (when (boundp symbol)
-        (invoke-restart 'use-value (symbol-value symbol)))))
-  (funcall orig condition hook))
-
 (defun unquote-reader-hook (orig thunk)
   (if (and (eq *readtable* (named-readtables:find-readtable 'readtable))
            (= fare-quasiquote::*quasiquote-level* 0))
       (let ((fare-quasiquote::*quasiquote-level* 1)) (funcall orig thunk))
       (funcall orig thunk)))
 
-(defun installed-p () (find-package "UNIX-IN-LISP.PATH"))
+(define-condition already-installed (error) ()
+  (:report "There seems to be a previous Unix in Lisp installation."))
 (defun install ()
-  (when (installed-p)
-    (restart-case
-        (error "There seems to be a previous Unix in Lisp installation.")
+  (when (find-package "UNIX-IN-LISP.PATH")
+    (restart-case (error 'already-installed)
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
   (named-readtables:in-readtable readtable)
@@ -301,21 +320,13 @@ Returns the SYMBOL with shorthand resolved."
           ((package-path (symbol-package symbol))
            (write-string (symbol-path symbol) stream))
           (t (call-next-method))))
-  ;; TODO: something more clever, maybe `fswatch'
-  (nhooks:add-hook *post-command-hook* 'remount-current-directory)
   (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
   (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
   (values))
-(defun setup ()
-  (unless (installed-p)
-    (install))
-  (named-readtables:in-readtable readtable)
-  (setq *debugger-hook* (cl-advice:ensure-advisable-function *debugger-hook*))
-  (cl-advice:add-advice :around *debugger-hook* 'debug-hook)
-  (cd "~/")
-  (values))
 
 (defun uninstall ()
+  (cl-advice:remove-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
+  (cl-advice:remove-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
   (when-let (method (find-method #'print-object '(:around) '(symbol t) nil))
     (remove-method #'print-object method))
   (mapc
@@ -327,4 +338,11 @@ Returns the SYMBOL with shorthand resolved."
   (when (find-package "UNIX-IN-LISP.PATH")
     (delete-package "UNIX-IN-LISP.PATH"))
   (named-readtables:in-readtable :standard)
+  (values))
+
+(defun setup ()
+  (handler-case (install)
+    (already-installed ()))
+  (named-readtables:in-readtable readtable)
+  (cd "~/")
   (values))
