@@ -9,6 +9,12 @@
   (:export #:cd #:contents))
 (in-package #:unix-in-lisp)
 
+(-> canonical-symbol (symbol) symbol)
+(-> mount-file (t) symbol)
+(-> ensure-path (t) string)
+(-> mount-directory (t) package)
+(-> ensure-homed-symbol (string package) symbol)
+
 (defun convert-case (string)
   "Convert external representation of STRING into internal representation
 for `package-name's and `symbol-name's."
@@ -47,7 +53,6 @@ path designated by a symbol, consider using `ensure-path'."
     (error "Home package ~S of ~S is not a Unix FS package."
            (symbol-package symbol) symbol)))
 
-(-> canonical-symbol (symbol) symbol)
 (defun canonical-symbol (symbol)
   "Returns the symbol mounted to the path designated by SYMBOL.
 This mounts the symbol in the process and may also mount required Unix
@@ -59,7 +64,6 @@ FS packages."
          (mount-file (symbol-path symbol)))
         (t (error "~S does not designate a Unix path." symbol))))
 
-(-> ensure-path (t) string)
 (defun ensure-path (path)
   "Return the path (a string) designated by PATH."
   (cond ((pathnamep path)
@@ -73,7 +77,6 @@ FS packages."
 
 (defun to-dir (filename) (ppath:join filename ""))
 
-(-> mount-directory (t) package)
 (defun mount-directory (path)
   "Mount PATH as a Unix FS package, which must but a directory.
 Return the mounted package."
@@ -99,7 +102,6 @@ Return the mounted package."
                         (merge-pathnames uiop:*wild-file-for-directory* (to-dir path))))
     package))
 
-(-> ensure-homed-symbol (string package) symbol)
 (defun ensure-homed-symbol (symbol-name package)
   "Make a symbol with PACKAGE as home package.
 Return the symbol."
@@ -115,7 +117,6 @@ Return the symbol."
                       (intern symbol-name package))
                  (mapc (lambda (p) (use-package p package)) use-list)))))))
 
-(-> mount-file (t) symbol)
 (defun mount-file (filename)
   "Mount FILENAME as a symbol in the appropriate Unix FS package.
 Returns the mounted self-evaluating symbol."
@@ -261,21 +262,24 @@ Returns the mounted self-evaluating symbol."
 (defun cd (path)
   (setq *package* (mount-directory path)))
 
+(defun call-without-read-macro (char thunk)
+  (bind (((:values function terminating-p) (get-macro-character char)))
+    (unwind-protect
+         (progn (set-macro-character char nil t)
+                (funcall thunk))
+      (set-macro-character char function terminating-p))))
+
 (defun dot-read-macro (stream char)
   (flet ((delimiter-p (c)
            (or (eq c 'eof) (sb-impl:token-delimiterp c)))
          (unread (c)
            (unless (eq c 'eof) (unread-char c stream)))
          (standard-read ()
-           (bind (((:values function terminating-p) (get-macro-character #\.)))
-             (unwind-protect
-                  (progn
-                    (set-macro-character #\. nil t)
-                    (read stream))
-               (set-macro-character #\. function terminating-p)))))
+           (call-without-read-macro #\. (lambda () (read stream)))))
     (if (package-path *package*)
         (let ((char-1 (read-char stream nil 'eof))
               (char-2 (read-char stream nil 'eof)))
+          (print (list char char-1 char-2))
           (cond
             ((delimiter-p char-1)
              (unread char-1)
@@ -290,9 +294,14 @@ Returns the mounted self-evaluating symbol."
         (progn (unread char)
                (standard-read)))))
 
+(defun slash-read-macro (stream char)
+  (unread-char char stream)
+  (canonical-symbol (call-without-read-macro char (lambda () (read stream)))))
+
 (named-readtables:defreadtable readtable
   (:merge :fare-quasiquote)
   (:macro-char #\. 'dot-read-macro t)
+  (:macro-char #\/ 'slash-read-macro t)
   (:case :invert))
 
 (defun unquote-reader-hook (orig thunk)
