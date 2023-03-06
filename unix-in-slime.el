@@ -30,15 +30,15 @@
 
 
 (require 'ansi-color)
+(require 'nadvice)
 (require 'slime)
+(require 'slime-mrepl)
 
 (define-advice slime-repl-emit
     (:after (string) unix-in-slime)
   (with-current-buffer (slime-output-buffer)
     (comint-carriage-motion slime-output-start slime-output-end)
     (ansi-color-apply-on-region slime-output-start slime-output-end)))
-
-(require 'slime-mrepl)
 
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp."
@@ -66,6 +66,11 @@
                  (slime-channel-send channel `(:prompt ,package ,prompt))))
              channel))))
       (save-excursion (slime-start :init-function #'unix-in-slime))))
+
+(define-advice slime-mrepl-prompt
+    (:after (package prompt) unix-in-slime)
+  (when (file-name-absolute-p prompt)
+    (setq-local default-directory (substring (file-name-concat prompt "x") 0 -1))))
 
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here
