@@ -2,19 +2,19 @@
 * Story
 /by @kchanqvq/
 I have had this observation that Unix is an awful programming language implementation for a really long time. The table below shows how various Unix concepts are just sloppy incarnation of general programming language concepts. 
-|---------------------------------+----------------------------------+-----------------------------|
-| Unix                            | Programming Language             | Common Lisp                 |
-|---------------------------------+----------------------------------+-----------------------------|
-| Directory                       | Module/namespace/environments... | Package                     |
-| File path                       | Variable/identifier              | Symbol                      |
-| =$PATH=                           | Module imports                   | USE-PACKAGE                 |
-| Environment variable            | Dynamic variable                 | Special variable            |
-| Raw bag of bytes (file content) | Structured Data                  | Structured Data             |
-| Executable                      | Functions                        | Functions                   |
-| Processes                       | Actors                           | Process object (actor-like) |
-| Build system                    | Dependency tracking              | asdf                        |
-| Init daemon                     | Dependency tracking              | asdf                        |
-|---------------------------------+----------------------------------+-----------------------------|
+|--------------------------+----------------------------------+-----------------------------|
+| Unix                     | Programming Language             | Common Lisp                 |
+|--------------------------+----------------------------------+-----------------------------|
+| Directory                | Module/namespace/environments... | Package                     |
+| File path                | Variable/identifier              | Symbol                      |
+| =$PATH=                    | Module imports                   | USE-PACKAGE                 |
+| Environment variable     | Dynamic variable                 | Special variable            |
+| Raw bytes (file content) | Structured Data                  | Structured Data             |
+| Executable               | Functions                        | Functions/Macros            |
+| Process                  | Actor                            | Process object (actor-like) |
+| Build system             | Dependency tracking              | asdf                        |
+| Init daemon              | Reactive  programming            | cells or lwcells            |
+|--------------------------+----------------------------------+-----------------------------|
 
 
 I have since been lamenting why we can't have a good operating system and a good programming language at the same time. I can't really say Unix is a good operating system, but it at least does the job of reasonable state maintenance without constant restarts, something most source-file centric "modern" programming languages are complete lacking and all hope of using them as operating systems is lost. We had it in the past -- Smalltalk, Lisp Machines, but I still have to use "modern" software to survive. I had started to design my /dream/ operating environment, building on what we had in the last century and what is learned from researches in this century, a structural editor, on a residential Lisp environment, based on F-exprs, reactive programming and partial evaluation... I have been designing for years. I open Emacs and try to code this dozen-year project up from time to time. I type ten lines, then quit. I'm not insane enough to fix the world this way.
