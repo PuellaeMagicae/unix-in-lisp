@@ -4,4 +4,4 @@
                :trivial-package-locks :named-readtables
                :cl-advice :nhooks)
   :components ((:file "unix-in")
-               #+swank (:file "unix-in-slime" :depends-on ("unix-in"))))
+               #+(or swank slynk) (:file "unix-in-slime" :depends-on ("unix-in"))))

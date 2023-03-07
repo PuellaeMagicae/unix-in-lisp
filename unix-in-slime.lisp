@@ -8,8 +8,8 @@
   (multiple-value-bind (symbol-name package-name internal-p)
       (funcall orig string)
     (cond ((and (not package-name) (ppath:isabs symbol-name))
-           (bind (((dir . file)(ppath:split symbol-name)))
-             (values file dir nil)))
+           (bind (((dir . file) (ppath:split (convert-case symbol-name))))
+             (values (unconvert-case file) (unconvert-case dir) nil)))
           (t (values symbol-name package-name internal-p)))))
 
 (defun slime-install ()
@@ -26,8 +26,14 @@
                                 #+slynk 'slynk::tokenize-symbol-thoroughly
                                 'swank-tokenize-symbol-hook))
 (defun slime-uninstall ()
-  (cl-advice:remove-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-hook)
-  (cl-advice:remove-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
-  (cl-advice:remove-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook))
+  (cl-advice:remove-advice :around #+swank 'swank::tokenize-symbol-thoroughly
+                                   #+slynk 'slynk::tokenize-symbol-thoroughly
+                                   'swank-tokenize-symbol-hook)
+  (cl-advice:remove-advice :around #+swank 'swank::tokenize-symbol
+                                   #+slynk 'slynk::tokenize-symbol
+                                   'swank-tokenize-symbol-hook)
+  (cl-advice:remove-advice :around #+swank 'swank::untokenize-symbol
+                                   #+slynk 'slynk::untokenize-symbol
+                                   'swank-untokenize-symbol-hook))
 (cl-advice:add-advice :after 'install 'slime-install)
 (cl-advice:add-advice :before 'uninstall 'slime-uninstall)

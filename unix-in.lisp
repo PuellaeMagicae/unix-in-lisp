@@ -259,8 +259,8 @@ Returns the mounted self-evaluating symbol."
   (bind (((command . args) form))
     `(apply #'execute-command ',command ,(list 'fare-quasiquote:quasiquote args))))
 
-(defun cd (path)
-  (setq *package* (mount-directory path)))
+(defmacro cd (path)
+  `(setq *package* (mount-directory ,(list 'fare-quasiquote:quasiquote path))))
 
 (defun call-without-read-macro (char thunk)
   (bind (((:values function terminating-p) (get-macro-character char)))
@@ -305,9 +305,9 @@ Returns the mounted self-evaluating symbol."
   (:case :invert))
 
 (defun unquote-reader-hook (orig thunk)
-  (if (and (eq *readtable* (named-readtables:find-readtable 'readtable))
-           (= fare-quasiquote::*quasiquote-level* 0))
-      (let ((fare-quasiquote::*quasiquote-level* 1)) (funcall orig thunk))
+  (if (= fare-quasiquote::*quasiquote-level* 0)
+      (let ((fare-quasiquote::*quasiquote-level* 1))
+        (funcall orig thunk))
       (funcall orig thunk)))
 
 (define-condition already-installed (error) ()
@@ -324,11 +324,13 @@ Returns the mounted self-evaluating symbol."
   (let ((packages (mapcar #'mount-directory (uiop:getenv-pathnames "PATH"))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
   (defmethod print-object :around ((symbol symbol) stream)
-    (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
-          ((not (symbol-package symbol)) (call-next-method))
-          ((package-path (symbol-package symbol))
-           (write-string (symbol-path symbol) stream))
-          (t (call-next-method))))
+    (if *print-escape*
+        (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
+              ((not (symbol-package symbol)) (call-next-method))
+              ((package-path (symbol-package symbol))
+               (write-string (symbol-path symbol) stream))
+              (t (call-next-method)))
+        (call-next-method)))
   (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
   (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
   (values))
