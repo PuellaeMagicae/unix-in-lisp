@@ -1,5 +1,5 @@
 * File System Mapping
-Directories are mapped as /Unix  FS packages/. Unix FS packages is any Common Lisp package whose package name designate an absolute pathname (as in ~uiop:absolute-pathname-p~).
+Directories are mapped as /Unix FS packages/. Unix FS packages is any Common Lisp package whose package name designate an absolute pathname (as in ~uiop:absolute-pathname-p~).
 
 The exported symbols of a Unix FS package should one-to-one correspond to files in the mapped directory. Exceptions to this one-to-one correspondence:
 - Because of the limit of file system change tracking, the package structure in the Common Lisp image may diverge from the Unix FS state.

@@ -91,7 +91,7 @@ Return the mounted package."
          (package (or (find-package package-name)
                       (uiop:ensure-package
                        package-name
-                       :mix '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "CL")))))
+                       :mix '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "GENERIC-CL")))))
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
@@ -279,7 +279,6 @@ Returns the mounted self-evaluating symbol."
     (if (package-path *package*)
         (let ((char-1 (read-char stream nil 'eof))
               (char-2 (read-char stream nil 'eof)))
-          (print (list char char-1 char-2))
           (cond
             ((delimiter-p char-1)
              (unread char-1)
