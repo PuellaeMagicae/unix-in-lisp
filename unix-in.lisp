@@ -9,6 +9,8 @@
   (:export #:cd #:contents))
 (in-package #:unix-in-lisp)
 
+;;; File system - package system mounting
+
 (-> canonical-symbol (symbol) symbol)
 (-> mount-file (t) symbol)
 (-> ensure-path (t) string)
@@ -21,6 +23,8 @@ for `package-name's and `symbol-name's."
   (let ((*print-case* :upcase))
     (format nil "~a" (make-symbol string))))
 (defun unconvert-case (string)
+  "Convert internal representation STRING from `package-name's and
+`symbol-name's into external representations for paths."
   (let ((*print-case* :downcase))
     (format nil "~a" (make-symbol string))))
 
@@ -177,6 +181,7 @@ Returns the mounted self-evaluating symbol."
        (stream-error ()
          (setq *interactive-streams* (delete stream *interactive-streams*)))))
    *interactive-streams*))
+
 (defun ensure-stream-forcer ()
   (unless (and *interactive-stream-forcer*
                (bt:thread-alive-p *interactive-stream-forcer*))
@@ -188,9 +193,11 @@ Returns the mounted self-evaluating symbol."
                 #-swank progn
                 (loop (stream-forcer))))
              :name "Unix in Lisp Stream Forcer")))))
+
 (defun add-interactive-stream (stream)
   (ensure-stream-forcer)
   (pushnew stream *interactive-streams*))
+
 (defun stream-copier (input output cont)
   (let (#+swank (connection swank::*emacs-connection*))
     (lambda ()
@@ -203,6 +210,7 @@ Returns the mounted self-evaluating symbol."
                 (end-of-file () (return))
                 (stream-error () (return))))
          (funcall cont))))))
+
 (defun repl-connect (pipeline)
   (let ((repl-thread (bt:current-thread)))
     (add-interactive-stream (input pipeline))
@@ -222,11 +230,15 @@ Returns the mounted self-evaluating symbol."
                                 (teardown pipeline)
                                 (nhooks:run-hook *post-command-hook*)))))
     (values)))
+
 (defmethod print-object ((object pipeline) stream)
   (repl-connect object))
 
+;;; Command syntax
+
 (defgeneric contents (object &optional format))
-(defmethod contents ((pipeline pipeline) &optional (format :string))
+
+(defmethod contents ((pipeline pipeline) &optional (format :lines))
   (unwind-protect (uiop:slurp-input-stream format (output pipeline))
     (teardown pipeline)))
 
@@ -241,7 +253,7 @@ Returns the mounted self-evaluating symbol."
     (setq pipeline (lastcar args)
           args (butlast args)))
   (bind ((command (cons filename (mapcar #'princ-to-string args)))
-         (directory (uiop:absolute-pathname-p (package-name *package*)))
+         (directory (uiop:absolute-pathname-p (unconvert-case (package-name *package*))))
          (process
           (uiop:launch-program
            command
@@ -254,13 +266,18 @@ Returns the mounted self-evaluating symbol."
      :name (format nil "~A Error Output Copier" filename))
     (add-interactive-stream *standard-output*)
     (append-process pipeline process)))
+
 (defun command-macro (form env)
   (declare (ignore env))
   (bind (((command . args) form))
     `(apply #'execute-command ',command ,(list 'fare-quasiquote:quasiquote args))))
 
+;;; Built-in commands
+
 (defmacro cd (path)
   `(setq *package* (mount-directory ,(list 'fare-quasiquote:quasiquote path))))
+
+;;; Reader syntax hacks
 
 (defun call-without-read-macro (char thunk)
   (bind (((:values function terminating-p) (get-macro-character char)))
@@ -308,6 +325,8 @@ Returns the mounted self-evaluating symbol."
       (let ((fare-quasiquote::*quasiquote-level* 1))
         (funcall orig thunk))
       (funcall orig thunk)))
+
+;;; Installation/uninstallation
 
 (define-condition already-installed (error) ()
   (:report "There seems to be a previous Unix in Lisp installation."))

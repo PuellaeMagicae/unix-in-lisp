@@ -46,7 +46,7 @@
   (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
   (if (slime-connected-p)
       (progn
-        (slime-eval '(asdf:load-system "unix-in-lisp"))
+        (slime-eval '(ql:quickload "unix-in-lisp"))
         (slime-enable-contrib 'slime-mrepl)
         (let ((channel (slime-make-channel slime-listener-channel-methods)))
           (slime-eval-async
@@ -70,7 +70,8 @@
 (define-advice slime-mrepl-prompt
     (:after (package prompt) unix-in-slime)
   (when (file-name-absolute-p prompt)
-    (setq-local default-directory (substring (file-name-concat prompt "x") 0 -1))))
+    (setq-local default-directory
+                (substring (file-name-concat (slime-eval `(unix-in-lisp::unconvert-case ,prompt)) "x") 0 -1))))
 
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here
