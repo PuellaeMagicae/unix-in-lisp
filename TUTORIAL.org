@@ -1,0 +1,149 @@
+#+TITLE: Unix in Lisp shell tutorial
+* The missing semester
+** Shell Tools and Scripting
+#+begin_src shell
+mcd () {
+    mkdir -p "$1"
+    cd "$1"
+}
+#+end_src
+
+#+begin_src lisp
+(defcommand mcd (dir)
+  (mkdir -p ,dir)
+  (cd ,dir))
+#+end_src
+** Data Wrangling
+#+begin_src shell
+ssh myserver journalctl
+#+end_src
+
+#+begin_src lisp
+(defvar *journal* (ssh myserver journalctl))
+#+end_src
+
+#+begin_src shell
+ssh myserver journalctl | grep sshd
+#+end_src
+
+#+begin_src lisp
+(remove-if-not (lambda (line) (ppcre:scan "sshd" line)) *journal*)
+#+end_src
+
+#+begin_src shell
+ssh myserver journalctl
+ | grep sshd
+ | grep "Disconnected from"
+#+end_src
+
+#+begin_src lisp
+(remove-if-not
+ (lambda (line)
+   (and (ppcre:scan "sshd" line)
+        (ppcre:scan "Disconnected from" line)))
+ *journal*)
+#+end_src
+
+#+begin_src shell
+$ ssh myserver 'journalctl | grep sshd | grep "Disconnected from"' > ssh.log
+$ less ssh.log
+#+end_src
+
+#+begin_src lisp
+(defvar *ssh* ...)
+#+end_src
+
+#+begin_src lisp
+(defile ssh.log ...)
+#+end_src
+
+#+begin_src shell
+ssh myserver journalctl
+ | grep sshd
+ | grep "Disconnected from"
+ | sed -E 's/.*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \[preauth\])?$/\2/'
+#+end_src
+
+#+begin_src lisp
+(defvar *users*
+  (mapcan
+   (lambda (line)
+     (ppcre:register-groups-bind (_ user)
+         (".*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \\[preauth\\])?$"
+          line)
+       (when user (list user))))
+   (ssh myserver journalctl)))
+#+end_src
+
+#+begin_src shell
+ssh myserver journalctl
+ | grep sshd
+ | grep "Disconnected from"
+ | sed -E 's/.*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \[preauth\])?$/\2/'
+ | sort | uniq -c
+#+end_src
+
+#+begin_src lisp
+(defun count (lines)
+  "Count unique elements in LINES.
+Return an ALIST with elements (line . count-of-ocurrences)."
+  (let ((table (make-hash-table :test 'equal)))
+    (mapc (lambda (user)
+            (incf (gethash user table 0)))
+          lines)
+    (alexandria:hash-table-alist table))
+#+end_src
+
+#+begin_src lisp
+(defvar *fail-users-alist* (count *users*)
+#+end_src
+
+#+begin_src shell
+ssh myserver journalctl
+ | grep sshd
+ | grep "Disconnected from"
+ | sed -E 's/.*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \[preauth\])?$/\2/'
+ | sort | uniq -c
+ | sort -nk1,1 | tail -n10
+#+end_src
+
+#+begin_src lisp
+(defvar *sus-users* (subseq (sort *fail-users-alist* #'> :key #'cdr) 0 10))
+#+end_src
+
+#+begin_src shell
+ssh myserver journalctl
+ | grep sshd
+ | grep "Disconnected from"
+ | sed -E 's/.*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \[preauth\])?$/\2/'
+ | sort | uniq -c
+ | sort -nk1,1 | tail -n10
+ | awk '{print $2}' | paste -sd,
+#+end_src
+
+#+begin_src lisp
+(serapeum:string-join (mapcar #'car *sus-users*) ",")
+#+end_src
+** Analyzing data
+#+begin_src shell
+ | paste -sd+ | bc -l
+#+end_src
+
+#+begin_src lisp
+(reduce #'+ (mapcar #'cdr *fail-users-alist*))
+#+end_src
+** Data wrangling to make arguments
+#+begin_src shell
+rustup toolchain list | grep nightly | grep -vE "nightly-x86" | sed 's/-x86.*//' | xargs rustup toolchain uninstall
+#+end_src
+
+#+begin_src lisp
+(defvar *unused-crabs*
+  (mapcan
+   (lambda (l)
+     (when (and (ppcre:scan "nightly" l)
+                (not (ppcre:scan "nightly-x86" l)))
+       (list (ppcre:regex-replace "-x86.*" l ""))))
+   (rustup toolchain list)))
+(rustup toolchain uninstall ,@*unused-crabs*)
+#+end_src

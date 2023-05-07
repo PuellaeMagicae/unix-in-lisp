@@ -1,15 +1,17 @@
 (uiop:define-package #:unix-in-lisp
-  (:use :cl :named-closure)
+  (:use :cl :named-closure :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :concat :package-exports #:-> #:mapconcat)
   (:import-from :alexandria #:when-let #:if-let)
-  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents))
+  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile))
 (uiop:define-package #:unix-in-lisp.common
   (:use #:unix-in-lisp)
-  (:export #:cd #:contents))
+  (:export #:cd #:contents #:defile))
 (in-package #:unix-in-lisp)
 
-;;; File system - package system mounting
+;;; File system
+
+;;;; package system mounting
 
 (-> canonical-symbol (symbol) symbol)
 (-> mount-file (t) symbol)
@@ -51,7 +53,7 @@ or NIL if PACKAGE is not a UNIX FS package."
 Signals an error if the home package SYMBOL is not a Unix FS package.
 
 Note that SYMBOL must be the canonical mounted symbol, to retrieve the
-path designated by a symbol, consider using `ensure-path'."
+path designated by any symbol, consider using `ensure-path'."
   (if-let (dir (package-path (symbol-package symbol)))
     (ppath:join dir (unconvert-case (symbol-name symbol)))
     (error "Home package ~S of ~S is not a Unix FS package."
@@ -66,10 +68,13 @@ FS packages."
          (mount-file (unconvert-case (symbol-name symbol))))
         ((package-path (symbol-package symbol))
          (mount-file (symbol-path symbol)))
-        (t (error "~S does not designate a Unix path." symbol))))
+        (t symbol)))
+
+(defun symbol-home-p (symbol) (eq *package* (symbol-package symbol)))
 
 (defun ensure-path (path)
-  "Return the path (a string) designated by PATH."
+  "Return the path (a string) designated by PATH.
+The result is guaranteed to be a file path (without trailing slashes)."
   (cond ((pathnamep path)
          (setq path (uiop:native-namestring path)))
         ((symbolp path)
@@ -81,16 +86,35 @@ FS packages."
 
 (defun to-dir (filename) (ppath:join filename ""))
 
+(define-condition wrong-file-kind (simple-error file-error)
+  ((wanted-kind :initarg :wanted-kind) (actual-kind :initarg :actual-kind))
+  (:report
+   (lambda (c s)
+     (with-slots (wanted-kind actual-kind) c
+       (format s "~a is a ~a, wanted ~a."
+               (file-error-pathname c) actual-kind wanted-kind)))))
+
+(define-condition file-does-not-exist (simple-error file-error) ()
+  (:report
+   (lambda (c s)
+     (format s "~a does not exist." (file-error-pathname c)))))
+
+(defun assert-file-kind (path &rest kinds)
+  (let ((kind (osicat:file-kind path :follow-symlinks t)))
+    (unless (member kind kinds)
+      (if kind
+          (error 'wrong-file-kind :pathname path :wanted-kind kinds :actual-kind kind)
+          (error 'file-does-not-exist :pathname path)))))
+
 (defun mount-directory (path)
-  "Mount PATH as a Unix FS package, which must but a directory.
+  "Mount PATH as a Unix FS package, which must be a directory.
 Return the mounted package."
   (setq path (ensure-path path))
-  (cond ((ppath:isdir path))
-        ((ppath:lexists path)
-         (error "~a is not a directory." path))
-        (t (restart-case (error "Directory ~a does not exist." path)
-             (create-directory ()
-               (ensure-directories-exist (to-dir path))))))
+  (restart-case
+      (assert-file-kind path :directory)
+    (create-directory ()
+      :test (lambda (c) (typep c 'file-does-not-exist))
+      (ensure-directories-exist (to-dir path))))
   (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
                       (uiop:ensure-package
@@ -122,19 +146,20 @@ Return the symbol."
                  (mapc (lambda (p) (use-package p package)) use-list)))))))
 
 (defun mount-file (filename)
-  "Mount FILENAME as a symbol in the appropriate Unix FS package.
-Returns the mounted self-evaluating symbol."
+  "Mount FILENAME as a symbol in the appropriate Unix FS package."
   (setq filename (ensure-path filename))
   (bind (((directory . file) (ppath:split filename))
          (package (or (find-package (convert-case directory)) (mount-directory directory)))
-         (symbol (ensure-homed-symbol (convert-case file) package)))
-    (proclaim `(special ,symbol))
-    (cond ((not (boundp symbol)) (setf (symbol-value symbol) symbol))
-          ((eq (symbol-value symbol) symbol))
+         (symbol (ensure-homed-symbol (convert-case file) package))
+         (binding-type (sb-cltl2:variable-information symbol)))
+    (cond ((or (not binding-type) (eq binding-type :symbol-macro))
+           (ensure-file-symbol-macro symbol))
           (t (restart-case
-                 (error "Symbol ~S has previously bound to ~S." symbol (symbol-value symbol))
-               (reckless-continue () :report "Overwrite the binding."
-                 (setf (symbol-value symbol) symbol)))))
+                 (error "Symbol ~S already has a ~A binding." symbol binding-type)
+               (reckless-continue () :report "Unintern the symbol and retry."
+                 (unintern symbol)
+                 (return-from mount-file
+                   (mount-file filename))))))
     (export symbol (symbol-package symbol))
     (when (uiop:file-exists-p filename)
       (ensure-executable symbol))
@@ -149,10 +174,44 @@ Returns the mounted self-evaluating symbol."
   (make-instance 'nhooks:hook-void
                  :handlers '(remount-current-directory)))
 
+;;;; Structured file abstraction
+
+(defun access-file (path)
+  (if (uiop:directory-exists-p path)
+      (mount-directory path)
+      (uiop:read-file-lines path)))
+
+(defun (setf access-file) (new-value path)
+  (let ((kind (osicat:file-kind path :follow-symlinks t)))
+    (when (eq kind :directory)
+        (error 'wrong-file-kind :pathname path :kinds "not directory" :actual-kind kind)))
+  (with-open-file
+      (stream path :direction :output
+                   :if-exists :supersede
+                   :if-does-not-exist :create)
+    (let ((*standard-output* stream))
+      (mapc #'write-line new-value))))
+
+(defmacro file (symbol)
+  `(access-file (ensure-path ',symbol)))
+
+(defun ensure-file-symbol-macro (symbol)
+  (eval `(define-symbol-macro ,symbol (access-file (symbol-path ',symbol)))))
+
+(defmacro defile (symbol &optional initform)
+  `(let ((%symbol (canonical-symbol ',symbol)))
+     (ensure-file-symbol-macro %symbol)
+     ,(when initform `(setf (access-file (symbol-path %symbol)) ,initform))
+     %symbol))
+
+;;; Pipeline actor
+
 (defclass pipeline ()
   ((input :reader input :initarg :input :type output-stream)
    (output :reader output :initarg :output :type input-stream)
-   (processes :reader processes :initarg :processes)))
+   (processes :reader processes :initarg :processes)
+   (output-contents :initform (serapeum:vect))))
+
 (defun append-process (pipeline process)
   (if pipeline
       (with-slots (processes output) pipeline
@@ -166,9 +225,46 @@ Returns the mounted self-evaluating symbol."
 
 (defun teardown (pipeline)
   (mapc #'uiop:wait-process (processes pipeline))
-  (mapc #'uiop:close-streams (processes pipeline)))
+  (mapc #'uiop:close-streams (processes pipeline))
+  (values))
+
 (defun alive (pipeline)
   (some #'uiop:process-alive-p (processes pipeline)))
+
+(defun get-line (pipeline)
+  (handler-case
+      (let ((line (read-line (output pipeline))))
+        (vector-push-extend line (slot-value pipeline 'output-contents))
+        line)
+    (end-of-file ()
+      (teardown pipeline)
+      nil)))
+
+(defstruct (pipeline-iterator (:include generic-cl:iterator))
+  index pipeline)
+
+(defmethod generic-cl:make-iterator ((p pipeline) start end)
+  (make-pipeline-iterator :index start :pipeline p))
+
+(defmethod generic-cl:at ((i pipeline-iterator))
+  (with-slots (index pipeline) i
+    (with-slots (output-contents) pipeline
+      (iter (while (not (< index (length output-contents))))
+        (get-line pipeline))
+      (aref output-contents index))))
+
+(defmethod generic-cl:advance ((i pipeline-iterator))
+  (incf (pipeline-iterator-index i)))
+
+(defmethod generic-cl:endp ((i pipeline-iterator))
+  (with-slots (index pipeline) i
+    (with-slots (output-contents) pipeline
+      (and (not (< index (length output-contents)))
+           (or (not (open-stream-p (output pipeline)))
+               (not (get-line pipeline)))))))
+
+(defmethod generic-cl:cleared ((p pipeline) &key &allow-other-keys))
+
 (defvar *interactive-streams* nil)
 (defvar *interactive-stream-forcer* nil)
 (defun stream-forcer ()
@@ -229,9 +325,42 @@ Returns the mounted self-evaluating symbol."
                                 (close (input pipeline))
                                 (teardown pipeline)
                                 (nhooks:run-hook *post-command-hook*)))))
-    (values)))
+    pipeline))
 
-(defmethod print-object ((object pipeline) stream)
+(defun compute-lexifications (body)
+  "Return an ALIST that map symbols to their canonical symbols.
+This scans BODY to discover any symbol that correspond to Unix file,
+but is not canonical.
+
+The returned alist is intended for establishing MACROLET and
+SYMBOL-MACROLET bindings to redirect accesses to the canonical symbol,
+inspired by the Common Lisp implementation of locale/lexical
+environment (Gat, E. Locales: First-Class Lexical Environments for
+Common Lisp)."
+  (let ((map (make-hash-table)))
+    (serapeum:walk-tree
+     (lambda (form)
+       (when (symbolp form)
+         (handler-case
+             (setf (gethash form map) (canonical-symbol form))
+           (file-error ()))))
+     body)
+    (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
+               (alexandria:hash-table-alist map))))
+
+(defmacro toplevel (&body body)
+  "Evaluate BODY, but with ergonomics improvements for using as a shell."
+  `(let ((result
+           (multiple-value-list
+            (symbol-macrolet
+                ,(mapcar (lambda (pair) (list (car pair) (cdr pair)))
+                         (compute-lexifications body))
+              ,@body))))
+     (when (typep (car result) 'pipeline)
+       (repl-connect (pop result)))
+     (values-list result)))
+
+#+nil (defmethod print-object ((object pipeline) stream)
   (repl-connect object))
 
 ;;; Command syntax
@@ -312,7 +441,10 @@ Returns the mounted self-evaluating symbol."
 
 (defun slash-read-macro (stream char)
   (unread-char char stream)
-  (canonical-symbol (call-without-read-macro char (lambda () (read stream)))))
+  (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
+    (if (symbol-home-p symbol)
+        (canonical-symbol symbol)
+        symbol)))
 
 (named-readtables:defreadtable readtable
   (:merge :fare-quasiquote)
