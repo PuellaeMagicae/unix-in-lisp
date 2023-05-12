@@ -14,67 +14,80 @@ mcd () {
   (cd ,dir))
 #+end_src
 ** Data Wrangling
+To get the data, in POSIX shell they write:
 #+begin_src shell
 ssh myserver journalctl
 #+end_src
-
+In Unix in Lisp, we write something very similar:
 #+begin_src lisp
-(defvar *journal* (ssh myserver journalctl))
+(def journal (ssh myserver journalctl))
+#+end_src
+Note that we conveniently store the result into ~journal~ so we can use it later. In POSIX shell they may use a temporary file, and they may be relunctant to do so to avoid littering in the file system. In any case, if we also want to store it in a file, just
+#+begin_src lisp
+(defile journal.log (ssh myserver journalctl))
 #+end_src
 
+In POSIX shell, they do the following to narrow down the lines.
 #+begin_src shell
 ssh myserver journalctl | grep sshd
 #+end_src
-
+In Unix in Lisp, we may do something similar
 #+begin_src lisp
-(remove-if-not (lambda (line) (ppcre:scan "sshd" line)) *journal*)
+(pipe journal (grep sshd))
+#+end_src
+We may do the same thing in a way that looks like more "common" Lisp:
+#+begin_src lisp
+(filter (lambda (line) (ppcre:scan "sshd" line)) journal)
 #+end_src
 
+In POSIX shell, they do the following to narrow down more:
 #+begin_src shell
 ssh myserver journalctl
  | grep sshd
  | grep "Disconnected from"
 #+end_src
-
+We can translate it "literally" into Unix in Lisp:
 #+begin_src lisp
-(remove-if-not
+(pipe journal (grep sshd) (grep "Disconnected from"))
+#+end_src
+Or do it the more "common" way:
+#+begin_src lisp
+(filter
  (lambda (line)
    (and (ppcre:scan "sshd" line)
         (ppcre:scan "Disconnected from" line)))
- *journal*)
+ journal)
 #+end_src
 
+Now, POSIX shell people write their intermediate result into a temporary file:
 #+begin_src shell
 $ ssh myserver 'journalctl | grep sshd | grep "Disconnected from"' > ssh.log
 $ less ssh.log
 #+end_src
-
-#+begin_src lisp
-(defvar *ssh* ...)
-#+end_src
-
+We have our intermediate result ready for use in our REPL via ~*,**,***~ variables. We can also store them into variables via ~def~ and alike. If we really want to store it persistently, just
 #+begin_src lisp
 (defile ssh.log ...)
 #+end_src
 
+POSIX shell people now use ~sed~ magic to pick out user names.
 #+begin_src shell
 ssh myserver journalctl
  | grep sshd
  | grep "Disconnected from"
  | sed -E 's/.*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \[preauth\])?$/\2/'
 #+end_src
-
+We still use regex magic here (using ~cl-ppcre~), but no need for ~sed~ line editing witchery. We collect the matches for the user field into a list:
 #+begin_src lisp
-(defvar *users*
-  (mapcan
-   (lambda (line)
+(def users
+  (collecting
+   (do-each (line (ssh myserver journalctl))
      (ppcre:register-groups-bind (_ user)
          (".*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \\[preauth\\])?$"
           line)
-       (when user (list user))))
-   (ssh myserver journalctl)))
+       (when user (collect user))))))
 #+end_src
 
+Now, POSIX shell people use ~sort~ and ~uniq~ to count time of occurrences:
 #+begin_src shell
 ssh myserver journalctl
  | grep sshd
@@ -82,22 +95,16 @@ ssh myserver journalctl
  | sed -E 's/.*Disconnected from (invalid |authenticating )?user (.*) [^ ]+ port [0-9]+( \[preauth\])?$/\2/'
  | sort | uniq -c
 #+end_src
-
+We may do something just as insane as the above:
 #+begin_src lisp
-(defun count (lines)
-  "Count unique elements in LINES.
-Return an ALIST with elements (line . count-of-ocurrences)."
-  (let ((table (make-hash-table :test 'equal)))
-    (mapc (lambda (user)
-            (incf (gethash user table 0)))
-          lines)
-    (alexandria:hash-table-alist table))
+(pipe users (sort) (uniq -c))
+#+end_src
+The output is a list of table rows, each of them is a string separated by white spaces. Rather than meddling with these unstructured text, I recommend using structured data consisting of real lists and numbers.
+#+begin_src lisp
+(def fail-users-alist (hash-table-alist (frequencies users)))
 #+end_src
 
-#+begin_src lisp
-(defvar *fail-users-alist* (count *users*)
-#+end_src
-
+In POSIX shell, they use some more cryptic text-manipulating spells to sort the table and display the 10 users with most occurrences:
 #+begin_src shell
 ssh myserver journalctl
  | grep sshd
@@ -106,11 +113,12 @@ ssh myserver journalctl
  | sort | uniq -c
  | sort -nk1,1 | tail -n10
 #+end_src
-
+In Lisp, we do it the structured data way:
 #+begin_src lisp
-(defvar *sus-users* (subseq (sort *fail-users-alist* #'> :key #'cdr) 0 10))
+(def sus-users (subseq (sort fail-users-alist #'> :key #'cdr) 0 10))
 #+end_src
 
+In POSIX shell, ~awk~ and ~paste~ to construct a comma separated list:
 #+begin_src shell
 ssh myserver journalctl
  | grep sshd
@@ -120,30 +128,34 @@ ssh myserver journalctl
  | sort -nk1,1 | tail -n10
  | awk '{print $2}' | paste -sd,
 #+end_src
-
+In Lisp, we:
 #+begin_src lisp
-(serapeum:string-join (mapcar #'car *sus-users*) ",")
+(string-join (mapcar #'car sus-users) ",")
 #+end_src
+
 ** Analyzing data
+Now the POSIX crowd spirals deeper into insanity, constructing math expressions using string concatenation and passing to ~bs~:
 #+begin_src shell
- | paste -sd+ | bc -l
+... | paste -sd+ | bc -l
+#+end_src
+In Lisp, we simply:
+#+begin_src lisp
+(reduce #'+ (mapcar #'cdr fail-users-alist))
 #+end_src
 
-#+begin_src lisp
-(reduce #'+ (mapcar #'cdr *fail-users-alist*))
-#+end_src
 ** Data wrangling to make arguments
+The POSIX shell way:
 #+begin_src shell
 rustup toolchain list | grep nightly | grep -vE "nightly-x86" | sed 's/-x86.*//' | xargs rustup toolchain uninstall
 #+end_src
-
+The Lisp way:
 #+begin_src lisp
-(defvar *unused-crabs*
+(def unused-crabs
   (mapcan
    (lambda (l)
      (when (and (ppcre:scan "nightly" l)
                 (not (ppcre:scan "nightly-x86" l)))
        (list (ppcre:regex-replace "-x86.*" l ""))))
    (rustup toolchain list)))
-(rustup toolchain uninstall ,@*unused-crabs*)
+(rustup toolchain uninstall ,@unused-crabs)
 #+end_src

@@ -1,12 +1,14 @@
 (uiop:define-package #:unix-in-lisp
   (:use :cl :named-closure :iter)
   (:import-from :metabang-bind #:bind)
-  (:import-from :serapeum #:lastcar :concat :package-exports #:-> #:mapconcat)
-  (:import-from :alexandria #:when-let #:if-let)
-  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile))
+  (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat #:slot-value-safe)
+  (:import-from :alexandria #:when-let #:if-let #:deletef)
+  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe))
+
 (uiop:define-package #:unix-in-lisp.common
   (:use #:unix-in-lisp)
-  (:export #:cd #:contents #:defile))
+  (:export #:cd #:contents #:defile #:pipe))
+
 (in-package #:unix-in-lisp)
 
 ;;; File system
@@ -106,6 +108,9 @@ The result is guaranteed to be a file path (without trailing slashes)."
           (error 'wrong-file-kind :pathname path :wanted-kind kinds :actual-kind kind)
           (error 'file-does-not-exist :pathname path)))))
 
+(defvar *fs-package-use-list*
+  '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "SERAPEUM" "ALEXANDRIA" "CL"))
+
 (defun mount-directory (path)
   "Mount PATH as a Unix FS package, which must be a directory.
 Return the mounted package."
@@ -117,9 +122,7 @@ Return the mounted package."
       (ensure-directories-exist (to-dir path))))
   (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
-                      (uiop:ensure-package
-                       package-name
-                       :mix '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "GENERIC-CL")))))
+                      (uiop:ensure-package package-name :mix *fs-package-use-list*))))
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
@@ -148,6 +151,8 @@ Return the symbol."
 (defun mount-file (filename)
   "Mount FILENAME as a symbol in the appropriate Unix FS package."
   (setq filename (ensure-path filename))
+  (unless (ppath:lexists filename)
+    (error 'file-does-not-exist :pathname filename))
   (bind (((directory . file) (ppath:split filename))
          (package (or (find-package (convert-case directory)) (mount-directory directory)))
          (symbol (ensure-homed-symbol (convert-case file) package))
@@ -204,128 +209,235 @@ Return the symbol."
      ,(when initform `(setf (access-file (symbol-path %symbol)) ,initform))
      %symbol))
 
+;;; FD watcher
+
+(defvar *fd-watcher-thread* nil)
+(defvar *fd-watcher-event-base* nil)
+
+(defun fd-watcher ()
+  (loop (iolib:event-dispatch *fd-watcher-event-base*)))
+
+(defun ensure-fd-watcher ()
+  "Setup `*fd-watcher-thread*' and `*fd-watcher-event-base*'.
+We mainly use them to interactively copy data between file descriptors
+and Lisp streams. We don't use the implementation provided mechanisms
+because they often have unsatisfying interactivity (e.g. as of SBCL
+2.3.4, for quite a few cases the data is not transferred until the
+entire input is seen, i.e. until EOF)."
+  (unless (and *fd-watcher-event-base*
+               (iolib/multiplex::fds-of *fd-watcher-event-base*))
+    (setf *fd-watcher-event-base* (make-instance 'iolib:event-base)))
+  (unless (and *fd-watcher-thread*
+               (bt:thread-alive-p *fd-watcher-thread*))
+    (setf *fd-watcher-thread* (bt:make-thread #'fd-watcher))))
+
+(defun cleanup-fd-watcher ()
+  "Remove and close all file descriptors from `*fd-watcher-event-base*'.
+This is mainly for debugger purpose, to clean up the mess when dubious
+file descriptors are left open."
+  (iter (for (fd _) in-hashtable (iolib/multiplex::fds-of *fd-watcher-event-base*))
+    (iolib:remove-fd-handlers *fd-watcher-event-base* fd)
+    (isys:close fd)))
+
+(defun stop-fd-watcher ()
+  "Destroy `*fd-watcher-thread*' and `*fd-watcher-event-base*'.
+This is unsafe, for debug purpose only."
+  (cleanup-fd-watcher)
+  (bt:destroy-thread *fd-watcher-thread*)
+  (close *fd-watcher-event-base*))
+
+;;; Job control
+
+(defvar *jobs* nil)
+
 ;;; Pipeline actor
 
-(defclass pipeline ()
-  ((input :reader input :initarg :input :type output-stream)
-   (output :reader output :initarg :output :type input-stream)
-   (processes :reader processes :initarg :processes)
-   (output-contents :initform (serapeum:vect))))
+(defclass process-mixin (native-lazyseq:lazy-seq) ())
 
-(defun append-process (pipeline process)
-  (if pipeline
-      (with-slots (processes output) pipeline
-        (setq output (uiop:process-info-output process)
-              processes (nconc processes (list process)))
-        pipeline)
-      (make-instance 'pipeline
-                     :input (uiop:process-info-input process)
-                     :output (uiop:process-info-output process)
-                     :processes (list process))))
+(defgeneric process-output (object)
+  (:method ((object t))))
+(defgeneric process-input (object)
+  (:method ((object t))))
+(defgeneric process-wait (object))
 
-(defun teardown (pipeline)
-  (mapc #'uiop:wait-process (processes pipeline))
-  (mapc #'uiop:close-streams (processes pipeline))
+(defmethod shared-initialize ((p process-mixin) slot-names &key)
+  (setf (native-lazyseq:generator p)
+        (lambda ()
+          (when (and (process-output p)
+                     (open-stream-p (process-output p)))
+            (handler-case
+                (values (read-line (process-output p)) t)
+              (end-of-file ()
+                (close p)
+                nil)))))
+  (call-next-method))
+
+(defmethod shared-initialize :after ((p process-mixin) slot-names &key)
+  (push p *jobs*))
+
+(defmethod close :after ((p process-mixin) &key abort)
+  (declare (ignore abort))
+  (deletef *jobs* p))
+
+(defclass simple-process (process-mixin)
+  ((process :reader process :initarg :process)))
+
+(defmethod process-output ((p simple-process))
+  (sb-ext:process-output (process p)))
+(defmethod (setf process-output) (new-value (p simple-process))
+  (setf (sb-ext:process-output (process p)) new-value))
+
+(defmethod process-input ((p simple-process))
+  (sb-ext:process-input (process p)))
+(defmethod (setf process-input) (new-value (p simple-process))
+  (setf (sb-ext:process-input (process p)) new-value))
+
+(defmethod process-wait ((p simple-process))
+  (sb-ext:process-wait (process p)))
+
+(defmethod close ((p simple-process) &key abort)
+  (when abort
+    (sb-ext:process-kill (process p) sb-unix:sigterm))
+  (sb-ext:process-wait (process p))
+  (sb-ext:process-close (process p))
+  t)
+
+(defclass pipeline (process-mixin)
+  ((processes :reader processes :initarg :processes)
+   (process-input :accessor process-input)
+   (process-output :accessor process-output)))
+
+(defmethod process-wait ((p pipeline))
+  (mapc #'sb-ext:process-wait (processes p)))
+
+(defmethod close ((pipeline pipeline) &key abort)
+  (iter (for p in (processes pipeline))
+    (close p :abort abort)))
+
+(defgeneric read-fd-stream (object)
+  (:documentation "Return a fd-stream for reading cotents from OBJECT.
+The returned fd-stream is intended to be passed to a child process,
+and will be closed after child process creation.")
+  (:method ((object (eql :stream))) :stream)
+  (:method ((p process-mixin))
+    (prog1
+        (process-output p)
+      (setf (process-output p) nil)))
+  (:method ((stream sb-sys:fd-stream))
+    stream)
+  (:method ((p sequence))
+    (native-lazyseq:with-iterators (element next endp) p
+      (bind (((:values read-fd write-fd) (osicat-posix:pipe))
+             ((:labels clean-up ())
+              (iolib:remove-fd-handlers *fd-watcher-event-base* write-fd)
+              (isys:close write-fd))
+             ((:labels write-elements ())
+              (handler-case
+                  (iter
+                    (when (funcall endp)
+                      (return-from write-elements (clean-up)))
+                    (cffi:with-foreign-string ((buf size) (funcall element))
+                      ;; Replace NUL with Newline
+                      (setf (cffi:mem-ref buf :char (1- size)) 10)
+                      (osicat-posix:write write-fd buf size))
+                    (funcall next))
+                (osicat-posix:ewouldblock ())
+                (error (c) (describe c) (clean-up)))))
+        (setf (isys:fd-nonblock-p write-fd) t)
+        (ensure-fd-watcher)
+        (iolib:set-io-handler
+         *fd-watcher-event-base* write-fd
+         :write
+         (lambda (fd event error)
+           (unless (eq event :write)
+             (warn "FD watcher ~A get ~A ~A" fd event error))
+           (write-elements)))
+        (sb-sys:make-fd-stream read-fd :input t :auto-close t)))))
+
+(defun copy-fd-to-stream (read-fd stream)
+  (bind ((read-stream (sb-sys:make-fd-stream read-fd :input t))
+         ((:labels clean-up ())
+          (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
+          (close read-stream))
+         (connection swank-api:*emacs-connection*)
+         ((:labels read-data ())
+          (swank-api:with-connection (connection)
+            (handler-case
+                (iter (for c = (read-char-no-hang read-stream))
+                  (while c)
+                  (write-char c stream)
+                  (finally (force-output stream)))
+              (end-of-file () (clean-up))
+              (error (c) (describe c) (clean-up))))))
+    (setf (isys:fd-nonblock-p read-fd) t)
+    (ensure-fd-watcher)
+    (iolib:set-io-handler
+     *fd-watcher-event-base* read-fd
+     :read
+     (lambda (fd event error)
+       (unless (eq event :read)
+         (warn "FD watcher ~A get ~A ~A" fd event error))
+       (read-data))))
   (values))
 
-(defun alive (pipeline)
-  (some #'uiop:process-alive-p (processes pipeline)))
+(defgeneric write-fd-stream (object)
+  (:documentation "Return a fd-stream for writing cotents to OBJECT.
+The returned fd-stream is intended to be passed to a child process,
+and will be closed after child process creation.")
+  (:method ((object (eql :stream))) :stream)
+  (:method ((p process-mixin))
+    (prog1
+        (process-input p)
+      (setf (process-input p) nil)))
+  (:method ((s sb-sys:fd-stream)) s)
+  (:method ((s stream))
+    (bind (((:values read-fd write-fd) (osicat-posix:pipe)))
+      (copy-fd-to-stream read-fd s)
+      (setf (isys:fd-nonblock-p read-fd) t)
+      (sb-sys:make-fd-stream write-fd :output t :auto-close t))))
 
-(defun get-line (pipeline)
-  (handler-case
-      (let ((line (read-line (output pipeline))))
-        (vector-push-extend line (slot-value pipeline 'output-contents))
-        line)
-    (end-of-file ()
-      (teardown pipeline)
-      nil)))
+(defgeneric repl-connect (object)
+  (:method ((object t)))
+  (:documentation "Display OBJECT more \"thoroughly\" than `print'.
+Intended to be used at the REPL top-level to display the primary value
+of evualtion results.  See the methods for how we treat different
+types of objects."))
 
-(defstruct (pipeline-iterator (:include generic-cl:iterator))
-  index pipeline)
+(defmethod repl-connect ((p process-mixin))
+  "Connect `*standard-input*' and `*standard-output*' to P's input/output."
+  (when (process-output p)
+    (copy-fd-to-stream
+     (sb-sys:fd-stream-fd (process-output p))
+     *standard-output*))
+  (if (process-input p)
+      (let ((repl-thread (bt:current-thread)))
+        (bt:make-thread
+         (lambda ()
+           (process-wait p)
+           (bt:interrupt-thread
+            repl-thread
+            (lambda ()
+              (ignore-errors
+               (throw 'finish nil)))))
+         :name
+         "Unix in Lisp REPL process sentinel")
+        (catch 'finish
+          (loop
+            (handler-case
+                (write-char (read-char) (process-input p))
+              (end-of-file ()
+                (close (process-input p))
+                (return)))
+            (force-output (process-input p)))))
+      (process-wait p))
+  t)
 
-(defmethod generic-cl:make-iterator ((p pipeline) start end)
-  (make-pipeline-iterator :index start :pipeline p))
-
-(defmethod generic-cl:at ((i pipeline-iterator))
-  (with-slots (index pipeline) i
-    (with-slots (output-contents) pipeline
-      (iter (while (not (< index (length output-contents))))
-        (get-line pipeline))
-      (aref output-contents index))))
-
-(defmethod generic-cl:advance ((i pipeline-iterator))
-  (incf (pipeline-iterator-index i)))
-
-(defmethod generic-cl:endp ((i pipeline-iterator))
-  (with-slots (index pipeline) i
-    (with-slots (output-contents) pipeline
-      (and (not (< index (length output-contents)))
-           (or (not (open-stream-p (output pipeline)))
-               (not (get-line pipeline)))))))
-
-(defmethod generic-cl:cleared ((p pipeline) &key &allow-other-keys))
-
-(defvar *interactive-streams* nil)
-(defvar *interactive-stream-forcer* nil)
-(defun stream-forcer ()
-  "Loop body to run in Stream Forcer thread."
-  (sleep 0.1)
-  (mapc
-   (lambda (stream)
-     (handler-case
-         (force-output stream)
-       (stream-error ()
-         (setq *interactive-streams* (delete stream *interactive-streams*)))))
-   *interactive-streams*))
-
-(defun ensure-stream-forcer ()
-  (unless (and *interactive-stream-forcer*
-               (bt:thread-alive-p *interactive-stream-forcer*))
-    (let (#+swank (connection swank::*emacs-connection*))
-      (setq *interactive-stream-forcer*
-            (bt:make-thread
-             (lambda ()
-               (#+swank swank::with-connection #+swank (connection)
-                #-swank progn
-                (loop (stream-forcer))))
-             :name "Unix in Lisp Stream Forcer")))))
-
-(defun add-interactive-stream (stream)
-  (ensure-stream-forcer)
-  (pushnew stream *interactive-streams*))
-
-(defun stream-copier (input output cont)
-  (let (#+swank (connection swank::*emacs-connection*))
-    (lambda ()
-      (#+swank swank::with-connection #+swank (connection)
-       #-swank progn
-       (unwind-protect
-            (loop
-              (handler-case
-                  (write-char (read-char input) output)
-                (end-of-file () (return))
-                (stream-error () (return))))
-         (funcall cont))))))
-
-(defun repl-connect (pipeline)
-  (let ((repl-thread (bt:current-thread)))
-    (add-interactive-stream (input pipeline))
-    (add-interactive-stream *standard-output*)
-    (bt:make-thread
-     (stream-copier
-      (output pipeline) *standard-output*
-      (lambda ()
-        (bt:interrupt-thread
-         repl-thread
-         (lambda () (ignore-errors (throw 'finish nil))))))
-     :name "Unix in Lisp REPL Output Copier")
-    (catch 'finish
-      (funcall (stream-copier *standard-input* (input pipeline)
-                              (lambda ()
-                                (close (input pipeline))
-                                (teardown pipeline)
-                                (nhooks:run-hook *post-command-hook*)))))
-    pipeline))
+(defmethod repl-connect ((s native-lazyseq:lazy-seq))
+  "Force evaluation of S and print each elements."
+  ;; TODO: print as soon as each evaluation complete, rather than wait
+  ;; for the whole sequence.
+  (format t "~{~A~%~}" (coerce s 'list))
+  t)
 
 (defun compute-lexifications (body)
   "Return an ALIST that map symbols to their canonical symbols.
@@ -349,15 +461,18 @@ Common Lisp)."
                (alexandria:hash-table-alist map))))
 
 (defmacro toplevel (&body body)
-  "Evaluate BODY, but with ergonomics improvements for using as a shell."
+  "Evaluate BODY, but with ergonomics improvements for using as a shell.
+1. Use `compute-lexifications' to support relative symbol accesses.
+2. Use `repl-connect' to give returned primary value special
+treatment if possible."
   `(let ((result
            (multiple-value-list
             (symbol-macrolet
                 ,(mapcar (lambda (pair) (list (car pair) (cdr pair)))
                          (compute-lexifications body))
               ,@body))))
-     (when (typep (car result) 'pipeline)
-       (repl-connect (pop result)))
+     (when (repl-connect (car result))
+       (pop result))
      (values-list result)))
 
 #+nil (defmethod print-object ((object pipeline) stream)
@@ -365,41 +480,73 @@ Common Lisp)."
 
 ;;; Command syntax
 
-(defgeneric contents (object &optional format))
-
-(defmethod contents ((pipeline pipeline) &optional (format :lines))
-  (unwind-protect (uiop:slurp-input-stream format (output pipeline))
-    (teardown pipeline)))
-
 (defgeneric to-argument (object)
   (:method ((symbol symbol))  (princ-to-string symbol))
   (:method ((string string)) string)
   (:method ((cons cons)) (mapconcat #'to-argument cons "")))
 
-(defun execute-command (filename &rest args &aux pipeline)
-  (setq filename (ensure-path filename))
-  (when (typep (lastcar args) 'pipeline)
-    (setq pipeline (lastcar args)
-          args (butlast args)))
-  (bind ((command (cons filename (mapcar #'princ-to-string args)))
-         (directory (uiop:absolute-pathname-p (unconvert-case (package-name *package*))))
-         (process
-          (uiop:launch-program
-           command
-           :output :stream :error-output :stream
-           :input (if pipeline (output pipeline) :stream)
-           :directory directory)))
-    (bt:make-thread
-     (stream-copier (uiop:process-info-error-output process) *standard-output*
-                    (lambda ()))
-     :name (format nil "~A Error Output Copier" filename))
-    (add-interactive-stream *standard-output*)
-    (append-process pipeline process)))
+(defun split-args (args)
+  (iter (while args)
+    (if (keywordp (car args))
+        (progn
+          (collect (car args) into plist)
+          (collect (cadr args) into plist)
+          (setq args (cddr args)))
+        (progn
+          (collect (car args) into rest)
+          (setq args (cdr args))))
+    (finally (return (values plist rest)))))
+
+(defun execute-command (command args &key (input :stream) (output :stream) (error *standard-output*))
+  (let ((directory (uiop:absolute-pathname-p (unconvert-case (package-name *package*))))
+        input-1 output-1 error-1)
+    (unwind-protect
+         (progn
+           (psetq input-1 (read-fd-stream input)
+                  output-1 (write-fd-stream output)
+                  error-1 (write-fd-stream error))
+          (make-instance
+           'simple-process
+           :process
+           (sb-ext:run-program
+            (ensure-path command)
+            (mapcar #'princ-to-string args)
+            :wait nil
+            :input input-1 :output output-1 :error error-1
+            :directory directory)))
+      (when (streamp input-1)
+        (close input-1))
+      (when (streamp output-1)
+        (close output-1))
+      (when (streamp error-1)
+        (close error-1)))))
 
 (defun command-macro (form env)
   (declare (ignore env))
-  (bind (((command . args) form))
-    `(apply #'execute-command ',command ,(list 'fare-quasiquote:quasiquote args))))
+  (bind (((command . args) form)
+         ((:values plist command-args) (split-args args)))
+    `(execute-command
+      ',command
+      ,(list 'fare-quasiquote:quasiquote command-args)
+      ,@plist)))
+
+(defmacro pipe (&rest forms)
+  `(let (%processes)
+     (push ,(car forms) %processes)
+     ,@ (mapcar (lambda (form)
+                  `(push (,@form :input (car %processes))
+                         %processes))
+                (cdr forms))
+     (setq %processes (nreverse %processes))
+     (let ((p (make-instance 'pipeline)))
+       (setf (process-input p) (process-input (car %processes))
+             (process-output p) (process-output (lastcar %processes)))
+       (setq %processes
+             (remove-if-not
+              (lambda (p) (typep p 'process-mixin))
+              %processes))
+       (setf (slot-value p 'processes) %processes)
+       p)))
 
 ;;; Built-in commands
 
@@ -462,6 +609,7 @@ Common Lisp)."
 
 (define-condition already-installed (error) ()
   (:report "There seems to be a previous Unix in Lisp installation."))
+
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
     (restart-case (error 'already-installed)
@@ -483,6 +631,7 @@ Common Lisp)."
         (call-next-method)))
   (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
   (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
+  (ensure-fd-watcher)
   (values))
 
 (defun uninstall ()
