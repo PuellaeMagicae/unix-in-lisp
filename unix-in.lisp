@@ -495,9 +495,11 @@ types of objects."))
 
 (defmethod repl-connect ((s native-lazyseq:lazy-seq))
   "Force evaluation of S and print each elements."
-  ;; TODO: print as soon as each evaluation complete, rather than wait
-  ;; for the whole sequence.
-  (format t "~{~A~%~}" (coerce s 'list))
+  (native-lazyseq:with-iterators (element next endp) s
+    (iter (until (funcall endp))
+      (format t "~A~%" (funcall element))
+      (force-output)
+      (funcall next)))
   t)
 
 (defun compute-lexifications (body)
