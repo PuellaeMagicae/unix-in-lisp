@@ -116,7 +116,7 @@ Return the mounted package."
       (ensure-directories-exist (to-dir path))))
   (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
-                      (uiop:ensure-package package-name :use "UNIX-IN-LISP.COMMON"))))
+                      (uiop:ensure-package package-name :use '("UNIX-IN-LISP.COMMON")))))
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
@@ -700,9 +700,9 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
   (named-readtables:in-readtable readtable)
-  ;; Make UNIX-IN-LISP.PATH first because FS packages in PATH will
-  ;; circularly reference UNIX-IN-LISP.PATH
-  (make-package "UNIX-IN-LISP.PATH")
+  ;; Make UNIX-IN-LISP.COMMON first because FS packages in $PATH will
+  ;; circularly reference UNIX-IN-LISP.COMMON
+  (make-package "UNIX-IN-LISP.COMMON")
   (let ((packages (mapcar #'mount-directory (uiop:getenv-pathnames "PATH"))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
   (uiop:ensure-package "UNIX-IN-LISP.COMMON" :mix *common-package-use-list*
