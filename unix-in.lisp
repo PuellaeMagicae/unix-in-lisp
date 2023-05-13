@@ -3,11 +3,8 @@
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat #:slot-value-safe)
   (:import-from :alexandria #:when-let #:if-let #:deletef)
-  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe))
-
-(uiop:define-package #:unix-in-lisp.common
-  (:use #:unix-in-lisp)
-  (:export #:cd #:contents #:defile #:pipe))
+  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
+           #:repl-connect #:*jobs*))
 
 (in-package #:unix-in-lisp)
 
@@ -108,9 +105,6 @@ The result is guaranteed to be a file path (without trailing slashes)."
           (error 'wrong-file-kind :pathname path :wanted-kind kinds :actual-kind kind)
           (error 'file-does-not-exist :pathname path)))))
 
-(defvar *fs-package-use-list*
-  '("UNIX-IN-LISP.COMMON" "UNIX-IN-LISP.PATH" "SERAPEUM" "ALEXANDRIA" "CL"))
-
 (defun mount-directory (path)
   "Mount PATH as a Unix FS package, which must be a directory.
 Return the mounted package."
@@ -122,7 +116,7 @@ Return the mounted package."
       (ensure-directories-exist (to-dir path))))
   (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
-                      (uiop:ensure-package package-name :mix *fs-package-use-list*))))
+                      (uiop:ensure-package package-name :use "UNIX-IN-LISP.COMMON"))))
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
@@ -697,6 +691,9 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 (define-condition already-installed (error) ()
   (:report "There seems to be a previous Unix in Lisp installation."))
 
+(defvar *common-package-use-list*
+  '("UNIX-IN-LISP.PATH" "SERAPEUM" "ALEXANDRIA" "CL"))
+
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
     (restart-case (error 'already-installed)
@@ -708,6 +705,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
   (make-package "UNIX-IN-LISP.PATH")
   (let ((packages (mapcar #'mount-directory (uiop:getenv-pathnames "PATH"))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
+  (uiop:ensure-package "UNIX-IN-LISP.COMMON" :mix *common-package-use-list*
+                                             :reexport *common-package-use-list*)
   (defmethod print-object :around ((symbol symbol) stream)
     (if *print-escape*
         (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
@@ -732,6 +731,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
        (handler-bind ((package-error #'continue))
          (delete-package p))))
    (list-all-packages))
+  (when (find-package "UNIX-IN-LISP.COMMON")
+    (delete-package "UNIX-IN-LISP.COMMON"))
   (when (find-package "UNIX-IN-LISP.PATH")
     (delete-package "UNIX-IN-LISP.PATH"))
   (named-readtables:in-readtable :standard)

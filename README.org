@@ -1,5 +1,6 @@
 #+TITLE: Unix in Lisp - mount Unix into Common Lisp image
-* Quickstart
+Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinctive feature of Unix in Lisp is that rather than creating a sub-language for Unix operations, Unix concepts are directly/shallowly embedded into Lisp (e.g. Unix commands become Lisp macros).
+* Quick Start
 Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=.
 #+begin_src
   CL-USER> (quickload "unix-in-lisp")
@@ -30,14 +31,14 @@ But why not the Lisp way as well!
 For more examples, see [[file:TUTORIAL.org]]
 * Documentation
 ** File System Mapping
-Directories are mapped as /Unix FS packages/. A Unix FS packages is any Common Lisp package whose package name designate an absolute pathname (as in ~uiop:absolute-pathname-p~, or usually, when it starts with a slash).
+Directories are mapped as /Unix FS packages/. A Unix FS packages is any Common Lisp package whose package name designate an absolute path name (as in ~uiop:absolute-pathname-p~, or usually, when it starts with a slash).
 
 The exported symbols of a Unix FS package should one-to-one correspond to files in the mapped directory. Exceptions to this one-to-one correspondence:
 - Because of the limit of file system change tracking, the package structure in the Common Lisp image may diverge from the Unix FS state.
   - Currently, the state of a Unix FS package is synchronized when calling ~mount-directory~. By default, ~remount-current-directory~ is added to ~*post-command-hook*~, which does the obvious thing.
 
 ** Command and Process Mapping
-Unix in Lisp manages jobs in the unit of /Effective processes/. Theses include regular Unix processes represented by ~simple-process~, and ~pipeline~'s which are consist of any number of UNIX processes and Lisp function stages.
+Unix in Lisp manages jobs in the unit of /Effective processes/. Theses include regular Unix processes represented by ~simple-process~, and ~pipeline~'s which are consisted of any number of UNIX processes and Lisp function stages.
 *** Simple commands
 When Unix in Lisp maps a directory, files are checked for execution permission and executable ones are mapped as Common Lisp macros.  These macros /implicitly quasiquotes/ their arguments. The arguments are converted to strings using ~to-argument~, then passed to the corresponding executable.
 
@@ -47,7 +48,7 @@ Examples of using macros mapped from Unix commands
   ;; This cats together all files under current directory.
 #+end_src
 
-When ~to-argument~ sees a list, it converts its elements recursively and then concat them together. Hopefully it makes (manually or programmatically) writing structured command arguments easier
+When ~to-argument~ sees a list, it converts its elements recursively and then concatenate them together. Hopefully it makes (manually or programmatically) writing structured command arguments easier
 
 #+begin_src
   /Users/kchan/some-repo> (configure (--prefix= ,*my-prefered-prefix*))
@@ -75,7 +76,7 @@ Pipelines are created via the ~pipe~ macro:
          9
 #+end_src
 
-Under the hood, except the first stage, each stage of the pipeline is passed ~:input <result-of-previous-pipeline-stage>~ as an additional argument. Alternatively, if there are arguments ~_~, they are substituted with the result of the previous stage. You can mix Lisp functions and values with unix commands. Using Lisp value as the first input stage is easy enough:
+Under the hood, except the first stage, each stage of the pipeline is passed ~:input <result-of-previous-pipeline-stage>~ as an additional argument. Alternatively, if there are arguments ~_~, they are substituted with the result of the previous stage. You can mix Lisp functions and values with Unix commands. Using Lisp value as the first input stage is easy enough:
 #+begin_src
   /Users/kchan> (pipe (iota 10) (wc))
         10      10      20
@@ -87,3 +88,25 @@ The ~_~ extension make it easy to add Lisp functions to the mix:
         47
 #+end_src
 The above counts the number of file with filename longer than 10 under my home directory.
+*** Interactive Use
+Inside a ~unix-in-slime~ listener, if the primary value of evaluation is an effective process, ~unix-in-slime~ automatically "connect" it to the listener, i.e. I/O of the listener is redirected to the process, similar to /foreground processes/ in POSIX shell:
+#+begin_src
+/Users/kchan> (python3 -i)
+Python 3.8.9 (default, Apr 13 2022, 08:48:07)
+[Clang 13.1.6 (clang-1316.0.21.2.5)] on darwin
+Type "help", "copyright", "credits" or "license" for more information.
+>>> print("Hello world!")
+Hello world!
+>>> ; No values
+/Users/kchan>
+#+end_src
+
+*Attention:* use ~C-u RET~ to signal EOF in ~unix-in-slime~, similar to ~Ctrl+D~ in POSIX shells.
+
+When using Unix in Lisp outside ~unix-in-slime~, use ~(unix-in-lisp:repl-connect <process>)~ to achieve the same thing.
+
+~unix-in-lisp:*jobs*~ keeps a list of running effective processes:
+#+begin_src
+unix-in-lisp> *jobs*
+(#<simple-process python3 (running) {1005BFFCF3}>)
+#+end_src
