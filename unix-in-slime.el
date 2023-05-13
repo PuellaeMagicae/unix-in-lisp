@@ -46,7 +46,6 @@
   (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
   (if (slime-connected-p)
       (progn
-        (slime-eval '(ql:quickload "unix-in-lisp"))
         (slime-enable-contrib 'slime-mrepl)
         (let ((channel (slime-make-channel slime-listener-channel-methods)))
           (slime-eval-async
@@ -56,16 +55,16 @@
                (cl-destructuring-bind (remote thread-id package prompt) result
                  (pop-to-buffer (generate-new-buffer (slime-buffer-name :mrepl)))
                  (slime-mrepl-mode)
-                 (run-hooks 'slime-repl-mode-hook)
-                 (setq-local comint-inhibit-carriage-motion nil)
                  (setq slime-current-thread thread-id)
                  (setq slime-buffer-connection (slime-connection))
                  (set (make-local-variable 'slime-mrepl-remote-channel) remote)
                  (slime-channel-put channel 'buffer (current-buffer))
-                 (slime-mrepl-send `(:process "(unix-in-lisp:setup)"))
-                 (slime-channel-send channel `(:prompt ,package ,prompt))))
+                 (slime-mrepl-send
+                  '(:process "(cl:progn
+ (ql:quickload \"unix-in-lisp\")
+ (cl:funcall (cl:find-symbol \"SETUP\" \"UNIX-IN-LISP\")))"))))
              channel))))
-      (save-excursion (slime-start :init-function #'unix-in-slime))))
+      (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
 (define-advice slime-mrepl-prompt
     (:after (package prompt) unix-in-slime)
