@@ -246,6 +246,38 @@ This is unsafe, for debug purpose only."
   (bt:destroy-thread *fd-watcher-thread*)
   (close *fd-watcher-event-base*))
 
+(defun copy-fd-to-stream (read-fd stream &optional (continuation (lambda ())))
+  "Copy characters from READ-FD to STREAM.
+Characters are copied and FORCE-OUTPUT as soon as possible, making it
+more suitable for interactive usage than some implementation provided
+mechanisms."
+  (declare (type function continuation))
+  (bind ((read-stream (sb-sys:make-fd-stream read-fd :input t))
+         ((:labels clean-up ())
+          (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
+          (close read-stream)
+          (funcall continuation))
+         (connection swank-api:*emacs-connection*)
+         ((:labels read-data ())
+          (swank-api:with-connection (connection)
+            (handler-case
+                (iter (for c = (read-char-no-hang read-stream))
+                  (while c)
+                  (write-char c stream)
+                  (finally (force-output stream)))
+              (end-of-file () (clean-up))
+              (error (c) (describe c) (clean-up))))))
+    (setf (isys:fd-nonblock-p read-fd) t)
+    (ensure-fd-watcher)
+    (iolib:set-io-handler
+     *fd-watcher-event-base* read-fd
+     :read
+     (lambda (fd event error)
+       (unless (eq event :read)
+         (warn "FD watcher ~A get ~A ~A" fd event error))
+       (read-data))))
+  (values))
+
 ;;; Job control
 
 (defvar *jobs* nil)
@@ -393,7 +425,9 @@ and will be closed after child process creation.")
                   (iter
                     (when (funcall endp)
                       (return-from write-elements (clean-up)))
-                    (cffi:with-foreign-string ((buf size) (funcall element))
+                    (cffi:with-foreign-string
+                        ((buf size)
+                         (princ-to-string (funcall element)))
                       ;; Replace NUL with Newline
                       (setf (cffi:mem-ref buf :char (1- size)) 10)
                       (osicat-posix:write write-fd buf size))
@@ -411,37 +445,12 @@ and will be closed after child process creation.")
            (write-elements)))
         (sb-sys:make-fd-stream read-fd :input t :auto-close t)))))
 
-(defun copy-fd-to-stream (read-fd stream)
-  (bind ((read-stream (sb-sys:make-fd-stream read-fd :input t))
-         ((:labels clean-up ())
-          (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
-          (close read-stream))
-         (connection swank-api:*emacs-connection*)
-         ((:labels read-data ())
-          (swank-api:with-connection (connection)
-            (handler-case
-                (iter (for c = (read-char-no-hang read-stream))
-                  (while c)
-                  (write-char c stream)
-                  (finally (force-output stream)))
-              (end-of-file () (clean-up))
-              (error (c) (describe c) (clean-up))))))
-    (setf (isys:fd-nonblock-p read-fd) t)
-    (ensure-fd-watcher)
-    (iolib:set-io-handler
-     *fd-watcher-event-base* read-fd
-     :read
-     (lambda (fd event error)
-       (unless (eq event :read)
-         (warn "FD watcher ~A get ~A ~A" fd event error))
-       (read-data))))
-  (values))
-
 (defgeneric write-fd-stream (object)
   (:documentation "Return a fd-stream for writing cotents to OBJECT.
 The returned fd-stream is intended to be passed to a child process,
 and will be closed after child process creation.")
   (:method ((object (eql :stream))) :stream)
+  (:method ((object (eql :output))) :output)
   (:method ((p process-mixin))
     (prog1
         (process-input p)
@@ -462,31 +471,26 @@ types of objects."))
 
 (defmethod repl-connect ((p process-mixin))
   "Connect `*standard-input*' and `*standard-output*' to P's input/output."
-  (when (process-output p)
-    (copy-fd-to-stream
-     (sb-sys:fd-stream-fd (process-output p))
-     *standard-output*))
-  (if (process-input p)
-      (let ((repl-thread (bt:current-thread)))
-        (bt:make-thread
-         (lambda ()
-           (process-wait p)
-           (bt:interrupt-thread
-            repl-thread
-            (lambda ()
-              (ignore-errors
-               (throw 'finish nil)))))
-         :name
-         "Unix in Lisp REPL process sentinel")
-        (catch 'finish
+  (let ((repl-thread (bt:current-thread)))
+    (when (process-output p)
+      (copy-fd-to-stream
+       (sb-sys:fd-stream-fd (process-output p))
+       *standard-output*
+       (lambda ()
+         (bt:interrupt-thread
+          repl-thread
+          (lambda ()
+            (ignore-errors (throw 'finish nil)))))))
+    (catch 'finish
+      (if (process-input p)
           (loop
             (handler-case
                 (write-char (read-char) (process-input p))
               (end-of-file ()
                 (close (process-input p))
                 (return)))
-            (force-output (process-input p)))))
-      (process-wait p))
+            (force-output (process-input p)))
+          (loop (sleep 0.1)))))
   t)
 
 (defmethod repl-connect ((s native-lazyseq:lazy-seq))
@@ -538,11 +542,22 @@ treatment if possible."
 ;;; Command syntax
 
 (defgeneric to-argument (object)
+  (:documentation "Convert Lisp OBJECT to Unix command argument.")
   (:method ((symbol symbol))  (princ-to-string symbol))
   (:method ((string string)) string)
-  (:method ((cons cons)) (mapconcat #'to-argument cons "")))
+  (:method ((list list))
+    "Elements of LIST are concatenated together.
+This implies: 1. if a command output a single line, its result can be
+used in arguments like POSIX shell command substitution.
+2. One can split components of arguments to a list, e.g.
+writing (--key= ,value)."
+    (mapconcat #'to-argument list "")))
 
 (defun split-args (args)
+  "Split ARGS into keyword argument plist and other arguments.
+Return two values: the plist of keywords and the list of other
+arguments.
+Example: (split-args a b :c d e) => (:c d), (a b e)"
   (iter (while args)
     (if (keywordp (car args))
         (progn
@@ -567,7 +582,7 @@ treatment if possible."
            :process
            (sb-ext:run-program
             (ensure-path command)
-            (mapcar #'princ-to-string args)
+            (map 'list #'to-argument args)
             :wait nil
             :input input-1 :output output-1 :error error-1
             :directory directory)
@@ -583,17 +598,32 @@ treatment if possible."
   (declare (ignore env))
   (bind (((command . args) form)
          ((:values plist command-args) (split-args args)))
-    `(execute-command
-      ',command
-      ,(list 'fare-quasiquote:quasiquote command-args)
-      ,@plist)))
+    ;; The following macrolet make ,@<some-sequence> work, just like
+    ;; ,@<some-list>.  This is done so that users can write
+    ;; ,@<some-unix-command> easily, similar to POSIX shell command
+    ;; substitutions.
+    `(macrolet ((fare-quasiquote::append (&rest args)
+                  `(append ,@ (mapcar (lambda (arg) `(coerce ,arg 'list)) args)))
+                (fare-quasiquote::quote (&rest x)
+                  `',(append (butlast x) (car (last x))
+                             (coerce (cdr (last x)) 'list))))
+       (execute-command
+        ',command
+        ,(list 'fare-quasiquote:quasiquote command-args)
+        ,@plist))))
+
+(defun placeholder-p (form)
+  (and (symbolp form) (string= (symbol-name form) "_")))
 
 (defmacro pipe (&rest forms)
   `(let (%processes)
      (push ,(car forms) %processes)
      ,@ (mapcar (lambda (form)
-                  `(push (,@form :input (car %processes))
-                         %processes))
+                  (if-let ((placeholder (and (listp form) (find-if #'placeholder-p form))))
+                    `(push ,(substitute '(car %processes) placeholder form)
+                           %processes)
+                    `(push (,@form :input (car %processes))
+                           %processes)))
                 (cdr forms))
      (setq %processes (nreverse %processes))
      (make-instance 'pipeline

@@ -1,33 +1,6 @@
 #+TITLE: Unix in Lisp - mount Unix into Common Lisp image
-* Story
-/by @kchanqvq/
-I have had this observation that Unix is an awful programming language implementation for a really long time. The table below shows how various Unix concepts are just sloppy incarnation of general programming language concepts. 
-|--------------------------+----------------------------------+-----------------------------|
-| Unix                     | Programming Language             | Common Lisp                 |
-|--------------------------+----------------------------------+-----------------------------|
-| Directory                | Module/namespace/environments... | Package                     |
-| File path                | Variable/identifier              | Symbol                      |
-| =$PATH=                    | Module imports                   | USE-PACKAGE                 |
-| Environment variable     | Dynamic variable                 | Special variable            |
-| Raw bytes (file content) | Structured Data                  | Structured Data             |
-| Executable               | Functions                        | Functions/Macros            |
-| Process                  | Actor                            | Process object (actor-like) |
-| Build system             | Dependency tracking              | asdf                        |
-| Init daemon              | Reactive  programming            | cells or lwcells            |
-|--------------------------+----------------------------------+-----------------------------|
-
-
-I have since been lamenting why we can't have a good operating system and a good programming language at the same time. I can't really say Unix is a good operating system, but it at least does the job of reasonable state maintenance without constant restarts, something most source-file centric "modern" programming languages are complete lacking and all hope of using them as operating systems is lost. We had it in the past -- Smalltalk, Lisp Machines, but I still have to use "modern" software to survive. I had started to design my /dream/ operating environment, building on what we had in the last century and what is learned from researches in this century, a structural editor, on a residential Lisp environment, based on F-exprs, reactive programming and partial evaluation... I have been designing for years. I open Emacs and try to code this dozen-year project up from time to time. I type ten lines, then quit. I'm not insane enough to fix the world this way.
-
-But then one day, an idea struck. What if I can make Unix part of a good language environment, even fully disguised as regular citizens of the language? Unix is a language with sloppy corners, after all, but the conceptual gap is small once the right mapping is found, and the sloppy behaviors are concealable. This is the pragmatic rather than idealistic solution. We might obtain a Lispy environment in which existing Unix software just works™, not unlike the Emacs experience, which has ~360k lines of C code as of 2023, runs on Unix, deals with mostly unstructured text buffer not unlike Unix files, yet is still enjoyable enough to use.
-
-So here is this project. The rightmost column in the table lists the better incarnation of programming language concepts found in Common Lisp, into which the corresponding Unix incarnation should be wrapped. Currently, the mapping of directory, file path, =$PATH= , executable and processes are mostly complete.
-
-Although at the current stage the project may look like a Lispy shell, I do not intend to create yet another™ shell™. There is no shell DSL. All examples are regular Common Lisp! I intend to make the Unix system accessible and used in regular Common Lisp programs and interactions, in a Lispy way if possible.
-
-Maybe a full distro one day, we can dream.
 * Quickstart
-Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=, then
+Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=.
 #+begin_src
   CL-USER> (quickload "unix-in-lisp")
   CL-USER> (in-package :unix-in-lisp)
@@ -36,16 +9,16 @@ Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/loc
   /Users/kchan> ;; enjoy!
 #+end_src
 
-It's recommended to load ~unix-in-slime.el~ for better Slime integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~. Sly is less well-supported. Load ~unix-in-sly.el~ instead if you use sly.
+It's recommended to load ~unix-in-slime.el~ for better Slime integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~, then ~M-x unix-in-slime~ to start a new REPL.
 
-To undo hacks done to the host environment (currently mostly the reader and printer, for the Unix style slash syntax) and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
+~unix-in-slime~ installs hacks to the host Lisp environment by calling ~(unix-in-lisp:install)~ on startup. To undo hacks done to the host environment (currently mostly the reader and printer, for the Unix style slash syntax) and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
 ** Examples
 (Some print-outs are omitted)
 
 Counting number of files
 #+begin_src 
   /Users/kchan> (cd quicklisp/local-projects/unix-in-lisp)
-  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (wc -l ,(ls))
+  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (pipe (wc -l) (ls))
          9
 #+end_src
 But why not the Lisp way as well!
@@ -53,3 +26,64 @@ But why not the Lisp way as well!
   /Users/kchan/quicklisp/local-projects/unix-in-lisp> (length (serapeum:package-exports))
   9
 #+end_src
+
+For more examples, see [[file:TUTORIAL.org]]
+* Documentation
+** File System Mapping
+Directories are mapped as /Unix FS packages/. A Unix FS packages is any Common Lisp package whose package name designate an absolute pathname (as in ~uiop:absolute-pathname-p~, or usually, when it starts with a slash).
+
+The exported symbols of a Unix FS package should one-to-one correspond to files in the mapped directory. Exceptions to this one-to-one correspondence:
+- Because of the limit of file system change tracking, the package structure in the Common Lisp image may diverge from the Unix FS state.
+  - Currently, the state of a Unix FS package is synchronized when calling ~mount-directory~. By default, ~remount-current-directory~ is added to ~*post-command-hook*~, which does the obvious thing.
+
+** Command and Process Mapping
+Unix in Lisp manages jobs in the unit of /Effective processes/. Theses include regular Unix processes represented by ~simple-process~, and ~pipeline~'s which are consist of any number of UNIX processes and Lisp function stages.
+*** Simple commands
+When Unix in Lisp maps a directory, files are checked for execution permission and executable ones are mapped as Common Lisp macros.  These macros /implicitly quasiquotes/ their arguments. The arguments are converted to strings using ~to-argument~, then passed to the corresponding executable.
+
+Examples of using macros mapped from Unix commands
+#+begin_src
+  /Users/kchan/some-documents> (cat ,@(ls))
+  ;; This cats together all files under current directory.
+#+end_src
+
+When ~to-argument~ sees a list, it converts its elements recursively and then concat them together. Hopefully it makes (manually or programmatically) writing structured command arguments easier
+
+#+begin_src
+  /Users/kchan/some-repo> (configure (--prefix= ,*my-prefered-prefix*))
+  ;; Similar to posix shell: configure --prefix=$MY-PREFERED-PREFIX
+#+end_src
+
+You can also set up redirections (and maybe other process creation settings in the future) via supplying keyword arguments. These arguments /are not/ implicitly quasiquoted and /are/ evaluated.
+
+#+begin_src
+  /Users/kchan/some-documents> (ls :output *terminal-io*)
+  ;; This outputs to *terminal-io*, which usually goes into *inferior-lisp* buffer.
+#+end_src
+
+#+begin_src
+  /Users/kchan/some-documents> (ls :error :output)
+  ;; This redirect stderr of ls command to its stdout, like 2>&1 in posix shell
+#+end_src
+
+Like you have discovered in ~(cat ,@(ls))~, effective processes can be used like Lisp sequences -- they designate the sequence of their output lines.
+*** Pipeline
+
+Pipelines are created via the ~pipe~ macro:
+#+begin_src
+  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (pipe (wc -l) (ls))
+         9
+#+end_src
+
+Under the hood, except the first stage, each stage of the pipeline is passed ~:input <result-of-previous-pipeline-stage>~ as an additional argument. Alternatively, if there are arguments ~_~, they are substituted with the result of the previous stage. You can mix Lisp functions and values with unix commands. Using Lisp value as the first input stage is easy enough:
+#+begin_src
+  /Users/kchan> (pipe (iota 10) (wc))
+        10      10      20
+#+end_src
+
+The ~_~ extension make it easy to add Lisp functions to the mix:
+#+begin_src
+  /Users/kchan> (pipe (ls) (filter (lambda (s) (> (length s) 10)) _) (wc -l))
+        47
+#+end_src
+The above counts the number of file with filename longer than 10 under my home directory.
