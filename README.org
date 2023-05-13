@@ -1,18 +1,21 @@
 #+TITLE: Unix in Lisp - mount Unix into Common Lisp image
 Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinctive feature of Unix in Lisp is that rather than creating a sub-language for Unix operations, Unix concepts are directly/shallowly embedded into Lisp (e.g. Unix commands become Lisp macros).
 * Quick Start
-Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=.
-#+begin_src
-  CL-USER> (quickload "unix-in-lisp")
-  CL-USER> (in-package :unix-in-lisp)
-  UNIX-IN-LISP> (install)
-  unix-in-lisp> (cd ~)
-  /Users/kchan> ;; enjoy!
-#+end_src
+Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazyseq]] into =~/quicklisp/local-projects/=.
 
 It's recommended to load ~unix-in-slime.el~ for better Slime integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~, then ~M-x unix-in-slime~ to start a new REPL.
 
+The following config is recommended to improve Slime MREPL ergonomics. You should add them to your ~init.el~:
+#+begin_src emacs-lisp
+(use-package slime-mrepl
+  :config
+  (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
+  (add-hook 'slime-mrepl-mode-hook #'slime-company-maybe-enable)
+  (add-hook 'slime-mrepl-mode-hook #'slime-autodoc-mode))
+#+end_src
+
 ~unix-in-slime~ installs hacks to the host Lisp environment by calling ~(unix-in-lisp:install)~ on startup. To undo hacks done to the host environment (currently mostly the reader and printer, for the Unix style slash syntax) and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
+
 ** Examples
 (Some print-outs are omitted)
 
