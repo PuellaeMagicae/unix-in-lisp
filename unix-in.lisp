@@ -1,5 +1,5 @@
 (uiop:define-package #:unix-in-lisp
-  (:use :cl :named-closure :iter)
+  (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat #:slot-value-safe)
   (:import-from :alexandria #:when-let #:if-let #:deletef)
@@ -252,13 +252,23 @@ This is unsafe, for debug purpose only."
 
 ;;; Pipeline actor
 
-(defclass process-mixin (native-lazyseq:lazy-seq) ())
+;;;; Abstract interactive process
+(defclass process-mixin (native-lazyseq:lazy-seq)
+  ((status-change-hook
+    :reader status-change-hook
+    :initform (make-instance 'nhooks:hook-void))))
 
 (defgeneric process-output (object)
   (:method ((object t))))
 (defgeneric process-input (object)
   (:method ((object t))))
 (defgeneric process-wait (object))
+(defgeneric process-status (object))
+(defgeneric description (object))
+
+(defmethod print-object ((p process-mixin) stream)
+  (print-unreadable-object (p stream :type t :identity t)
+    (format stream "~A (~A)" (description p) (process-status p))))
 
 (defmethod shared-initialize ((p process-mixin) slot-names &key)
   (setf (native-lazyseq:generator p)
@@ -272,15 +282,27 @@ This is unsafe, for debug purpose only."
                 nil)))))
   (call-next-method))
 
-(defmethod shared-initialize :after ((p process-mixin) slot-names &key)
-  (push p *jobs*))
+(defmethod initialize-instance :around ((p process-mixin) &key)
+  "Handle status change.
+We use :AROUND method so that this method is called after the :AFTER
+methods of any subclasses, to ensure status change hooks have been
+setup before we add it to *jobs*."
+  (call-next-method)
+  (nhooks:add-hook
+   (status-change-hook p)
+   (make-instance 'nhooks:handler
+                  :fn (lambda ()
+                        (unless (eq (process-status p) :running)
+                          (deletef *jobs* p)))
+                  :name 'remove-from-jobs))
+  (when (eq (process-status p) :running)
+    (push p *jobs*)))
 
-(defmethod close :after ((p process-mixin) &key abort)
-  (declare (ignore abort))
-  (deletef *jobs* p))
-
+;;;; Simple process
+;; Map 1-to-1 to UNIX process
 (defclass simple-process (process-mixin)
-  ((process :reader process :initarg :process)))
+  ((process :reader process :initarg :process)
+   (description :reader description :initarg :description)))
 
 (defmethod process-output ((p simple-process))
   (sb-ext:process-output (process p)))
@@ -295,6 +317,15 @@ This is unsafe, for debug purpose only."
 (defmethod process-wait ((p simple-process))
   (sb-ext:process-wait (process p)))
 
+(defmethod process-status ((p simple-process))
+  (sb-ext:process-status (process p)))
+
+(defmethod initialize-instance :after ((p simple-process) &key)
+  (setf (sb-ext:process-status-hook (process p))
+        (lambda (proc)
+          (declare (ignore proc))
+          (nhooks:run-hook (status-change-hook p)))))
+
 (defmethod close ((p simple-process) &key abort)
   (when abort
     (sb-ext:process-kill (process p) sb-unix:sigterm))
@@ -302,17 +333,43 @@ This is unsafe, for debug purpose only."
   (sb-ext:process-close (process p))
   t)
 
+;;;; Pipeline
+;; Consist of any number of UNIX processes and Lisp function stages
 (defclass pipeline (process-mixin)
   ((processes :reader processes :initarg :processes)
-   (process-input :accessor process-input)
-   (process-output :accessor process-output)))
+   (process-input :accessor process-input :initarg :process-input)
+   (process-output :accessor process-output :initarg :process-output)))
 
 (defmethod process-wait ((p pipeline))
-  (mapc #'sb-ext:process-wait (processes p)))
+  (mapc #'process-wait (processes p)))
 
 (defmethod close ((pipeline pipeline) &key abort)
   (iter (for p in (processes pipeline))
     (close p :abort abort)))
+
+(defmethod initialize-instance :after ((p pipeline) &key)
+  (mapc (lambda (child)
+          ;; Remove children from *jobs* because the pipeline will be
+          ;; put in *jobs* instead.
+          (nhooks:remove-hook (status-change-hook child) 'remove-from-jobs)
+          (deletef *jobs* child)
+          (nhooks:add-hook
+           (status-change-hook child)
+           (make-instance
+            'nhooks:handler
+            :fn (lambda ()
+                  (nhooks:run-hook (status-change-hook p)))
+            :name 'notify-parent)))
+        (processes p)))
+
+(defmethod process-status ((p pipeline))
+  (if (some (lambda (child) (eq (process-status child) :running))
+            (processes p))
+      :running
+      :exited))
+
+(defmethod description ((p pipeline))
+  (serapeum:string-join (mapcar #'description (processes p)) ","))
 
 (defgeneric read-fd-stream (object)
   (:documentation "Return a fd-stream for reading cotents from OBJECT.
@@ -513,7 +570,8 @@ treatment if possible."
             (mapcar #'princ-to-string args)
             :wait nil
             :input input-1 :output output-1 :error error-1
-            :directory directory)))
+            :directory directory)
+           :description (princ-to-string command)))
       (when (streamp input-1)
         (close input-1))
       (when (streamp output-1)
@@ -538,15 +596,12 @@ treatment if possible."
                          %processes))
                 (cdr forms))
      (setq %processes (nreverse %processes))
-     (let ((p (make-instance 'pipeline)))
-       (setf (process-input p) (process-input (car %processes))
-             (process-output p) (process-output (lastcar %processes)))
-       (setq %processes
-             (remove-if-not
-              (lambda (p) (typep p 'process-mixin))
-              %processes))
-       (setf (slot-value p 'processes) %processes)
-       p)))
+     (make-instance 'pipeline
+                    :processes (remove-if-not
+                                (lambda (p) (typep p 'process-mixin))
+                                %processes)
+                    :process-input (process-input (car %processes))
+                    :process-output (process-output (lastcar %processes)))))
 
 ;;; Built-in commands
 
