@@ -668,10 +668,15 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
                (standard-read)))))
 
 (defun slash-read-macro (stream char)
+  "If we're reading a symbol written as the absolute path of an
+*existing* Unix file, return its canonical symbol.  Otherwise return
+the original symbol."
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (if (symbol-home-p symbol)
-        (canonical-symbol symbol)
+        (handler-case
+            (canonical-symbol symbol)
+          (file-error () symbol))
         symbol)))
 
 (named-readtables:defreadtable readtable
