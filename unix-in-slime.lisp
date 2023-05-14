@@ -9,8 +9,19 @@
   (multiple-value-bind (symbol-name package-name internal-p)
       (funcall orig string)
     (cond ((and (not package-name) (ppath:isabs symbol-name))
-           (bind (((dir . file) (ppath:split (convert-case symbol-name))))
-             (values (unconvert-case file) (unconvert-case dir) nil)))
+           (bind (((dir . file) (ppath:split symbol-name)))
+             (ignore-some-conditions (file-error)
+               (mount-directory dir))
+             (values file dir nil)))
+          ((and (not package-name) (package-path swank::*buffer-package*)
+                (find #\/ symbol-name))
+           (bind (((dir . file) (ppath:split
+                                 (ppath:normpath
+                                  (ppath:join (package-path swank::*buffer-package*)
+                                              symbol-name)))))
+             (ignore-some-conditions (file-error)
+               (mount-directory dir))
+             (values file dir nil)))
           (t (values symbol-name package-name internal-p)))))
 
 (defun swank-mrepl-read-eval-print-hook (orig string)

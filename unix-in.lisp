@@ -2,7 +2,7 @@
   (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat #:slot-value-safe)
-  (:import-from :alexandria #:when-let #:if-let #:deletef)
+  (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
            #:repl-connect #:*jobs*))
 
@@ -35,7 +35,8 @@ for `package-name's and `symbol-name's."
             (intersection (osicat:file-permissions filename)
                           '(:user-exec :group-exec :other-exec))
           (osicat-posix:enoent ()
-            (warn "Probably broken symlink: ~a" filename)
+            ;; This warning is too noisy
+            #+nil (warn "Probably broken symlink: ~a" filename)
             nil))
         (setf (macro-function symbol) #'command-macro)
         (fmakunbound symbol)))
@@ -510,9 +511,8 @@ Common Lisp)."
     (serapeum:walk-tree
      (lambda (form)
        (when (symbolp form)
-         (handler-case
-             (setf (gethash form map) (canonical-symbol form))
-           (file-error ()))))
+         (ignore-some-conditions (file-error)
+           (setf (gethash form map) (canonical-symbol form)))))
      body)
     (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
                (alexandria:hash-table-alist map))))
@@ -539,7 +539,7 @@ treatment if possible."
 
 (defgeneric to-argument (object)
   (:documentation "Convert Lisp OBJECT to Unix command argument.")
-  (:method ((symbol symbol))  (princ-to-string symbol))
+  (:method ((symbol symbol))  (prin1-to-string symbol))
   (:method ((string string)) string)
   (:method ((list list))
     "Elements of LIST are concatenated together.
@@ -692,7 +692,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
   (:report "There seems to be a previous Unix in Lisp installation."))
 
 (defvar *common-package-use-list*
-  '("UNIX-IN-LISP.PATH" "SERAPEUM" "ALEXANDRIA" "CL"))
+  '("UNIX-IN-LISP" "UNIX-IN-LISP.PATH" "SERAPEUM" "ALEXANDRIA" "CL"))
 
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
