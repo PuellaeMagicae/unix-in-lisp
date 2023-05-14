@@ -1,7 +1,8 @@
 (uiop:define-package #:unix-in-lisp
   (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
-  (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat #:slot-value-safe)
+  (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
+                #:string-prefix-p)
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
            #:repl-connect #:*jobs*))
@@ -63,12 +64,9 @@ path designated by any symbol, consider using `ensure-path'."
   "Returns the symbol mounted to the path designated by SYMBOL.
 This mounts the symbol in the process and may also mount required Unix
 FS packages."
-  (cond ((equal (symbol-name symbol) "~") (mount-file "~/"))
-        ((ppath:isabs (symbol-name symbol))
-         (mount-file (unconvert-case (symbol-name symbol))))
-        ((package-path (symbol-package symbol))
-         (mount-file (symbol-path symbol)))
-        (t symbol)))
+  (if-let (path (ignore-errors (ensure-path symbol)))
+    (mount-file path)
+    symbol))
 
 (defun symbol-home-p (symbol) (eq *package* (symbol-package symbol)))
 
@@ -78,7 +76,14 @@ The result is guaranteed to be a file path (without trailing slashes)."
   (cond ((pathnamep path)
          (setq path (uiop:native-namestring path)))
         ((symbolp path)
-         (setq path (symbol-path (canonical-symbol path)))))
+         (setq path
+               (cond ((or (ppath:isabs (symbol-name path))
+                          (string-prefix-p "~" (symbol-name path)))
+                      (unconvert-case (symbol-name path)))
+                     ((package-path (symbol-package path))
+                      (ppath:join (package-path (symbol-package path))
+                                  (unconvert-case (symbol-name path))))
+                     (t (unconvert-case (symbol-name path)))))))
   (let ((path (ppath:expanduser (ppath:normpath path))))
     (unless (ppath:isabs path)
       (error "~S is not an absolute path." path))
@@ -668,9 +673,10 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
                (standard-read)))))
 
 (defun slash-read-macro (stream char)
-  "If we're reading a symbol written as the absolute path of an
-*existing* Unix file, return its canonical symbol.  Otherwise return
-the original symbol."
+  "If we're reading a symbol that designates an *existing* Unix file,
+return its canonical symbol.  Otherwise return the original symbol.
+Currently, this is intended to be used for *both* /path syntax and
+~user/path syntax."
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (if (symbol-home-p symbol)
@@ -683,6 +689,7 @@ the original symbol."
   (:merge :fare-quasiquote)
   (:macro-char #\. 'dot-read-macro t)
   (:macro-char #\/ 'slash-read-macro t)
+  (:macro-char #\~ 'slash-read-macro t)
   (:case :invert))
 
 (defun unquote-reader-hook (orig thunk)
