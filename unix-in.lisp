@@ -703,7 +703,10 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
   ;; Make UNIX-IN-LISP.COMMON first because FS packages in $PATH will
   ;; circularly reference UNIX-IN-LISP.COMMON
   (make-package "UNIX-IN-LISP.COMMON")
-  (let ((packages (mapcar #'mount-directory (uiop:getenv-pathnames "PATH"))))
+  (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
+                    (handler-case
+                        (collect (mount-directory path))
+                      (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
   (uiop:ensure-package "UNIX-IN-LISP.COMMON" :mix *common-package-use-list*
                                              :reexport *common-package-use-list*)
