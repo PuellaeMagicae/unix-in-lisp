@@ -106,6 +106,8 @@ Hello world!
 
 *Attention:* use ~C-u RET~ to signal EOF in ~unix-in-slime~, similar to ~Ctrl+D~ in POSIX shells.
 
+*Attention:* You have use ~-i~ flag to start Python REPL because Unix in Lisp currently talk to all processes using pipe rather than pseudo tty. Without ~-i~, Python will start itself into non-interactive mode. Other REPLs may need respective flags.
+
 When using Unix in Lisp outside ~unix-in-slime~, use ~(unix-in-lisp:repl-connect <process>)~ to achieve the same thing.
 
 ~unix-in-lisp:*jobs*~ keeps a list of running effective processes:
