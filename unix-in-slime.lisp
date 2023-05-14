@@ -5,24 +5,32 @@
          (ppath:join package-name symbol-name))
         (t (funcall orig package-name internal-p symbol-name))))
 
-(defun swank-tokenize-symbol-hook (orig string)
-  (multiple-value-bind (symbol-name package-name internal-p)
-      (funcall orig string)
+(defun swank-tokenize-symbol-convert (symbol-name package-name internal-p convert-case-p)
+  (flet ((convert-maybe (s)
+           (if convert-case-p (convert-case s) s))
+         (unconvert-maybe (s)
+           (if convert-case-p (unconvert-case s) s)))
     (cond ((and (not package-name) (ppath:isabs symbol-name))
-           (bind (((dir . file) (ppath:split symbol-name)))
+           (bind (((dir . file) (ppath:split (unconvert-maybe symbol-name))))
              (ignore-some-conditions (file-error)
                (mount-directory dir))
-             (values file dir nil)))
+             (values (convert-maybe file) (convert-maybe dir) nil)))
           ((and (not package-name) (package-path swank::*buffer-package*)
                 (find #\/ symbol-name))
            (bind (((dir . file) (ppath:split
                                  (ppath:normpath
                                   (ppath:join (package-path swank::*buffer-package*)
-                                              symbol-name)))))
+                                              (unconvert-maybe symbol-name))))))
              (ignore-some-conditions (file-error)
                (mount-directory dir))
-             (values file dir nil)))
+             (values (convert-maybe file) (convert-maybe dir) nil)))
           (t (values symbol-name package-name internal-p)))))
+
+(defun swank-tokenize-symbol-hook (orig string)
+  (multiple-value-call #'swank-tokenize-symbol-convert (funcall orig string) nil))
+
+(defun swank-tokenize-symbol-thoroughly-hook (orig string)
+  (multiple-value-call #'swank-tokenize-symbol-convert (funcall orig string) t))
 
 (defun swank-mrepl-read-eval-print-hook (orig string)
   (declare (ignore orig))
@@ -45,12 +53,11 @@
   (cl-advice:add-advice :around #+swank 'swank::tokenize-symbol
                                 #+slynk 'slynk::tokenize-symbol
                                 'swank-tokenize-symbol-hook)
-  ;; TODO: is it correct to use the same advice for both?
   ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
   ;; I feel like at least one of the two uses is subtlely wrong
   (cl-advice:add-advice :around #+swank 'swank::tokenize-symbol-thoroughly
                                 #+slynk 'slynk::tokenize-symbol-thoroughly
-                                'swank-tokenize-symbol-hook)
+                                'swank-tokenize-symbol-thoroughly-hook)
 
   (cl-advice:add-advice :around #+swank 'swank-mrepl::read-eval-print
                                 'swank-mrepl-read-eval-print-hook))
@@ -60,7 +67,7 @@
 
   (cl-advice:remove-advice :around #+swank 'swank::tokenize-symbol-thoroughly
                                    #+slynk 'slynk::tokenize-symbol-thoroughly
-                                   'swank-tokenize-symbol-hook)
+                                   'swank-tokenize-symbol-thoroughly-hook)
   (cl-advice:remove-advice :around #+swank 'swank::tokenize-symbol
                                    #+slynk 'slynk::tokenize-symbol
                                    'swank-tokenize-symbol-hook)
