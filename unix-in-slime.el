@@ -43,7 +43,11 @@
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp."
   (interactive)
+  (require 'slime-company)
+  (require 'slime-autodoc)
   (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
+  (add-hook 'slime-mrepl-mode-hook #'slime-company-maybe-enable)
+  (add-hook 'slime-mrepl-mode-hook #'slime-autodoc-mode)
   (if (slime-connected-p)
       (progn
         (slime-enable-contrib 'slime-mrepl)

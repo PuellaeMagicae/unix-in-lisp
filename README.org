@@ -5,15 +5,6 @@ Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/loc
 
 It's recommended to load ~unix-in-slime.el~ for better Slime integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~, then ~M-x unix-in-slime~ to start a new REPL.
 
-The following config is recommended to improve Slime MREPL ergonomics. You should add them to your ~init.el~:
-#+begin_src emacs-lisp
-(use-package slime-mrepl
-  :config
-  (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
-  (add-hook 'slime-mrepl-mode-hook #'slime-company-maybe-enable)
-  (add-hook 'slime-mrepl-mode-hook #'slime-autodoc-mode))
-#+end_src
-
 ~unix-in-slime~ installs hacks to the host Lisp environment by calling ~(unix-in-lisp:install)~ on startup. To undo hacks done to the host environment (currently mostly the reader and printer, for the Unix style slash syntax) and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
 
 ** Examples
