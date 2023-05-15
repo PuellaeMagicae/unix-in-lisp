@@ -543,11 +543,28 @@ treatment if possible."
               ,@body))))
      (when (repl-connect (car result))
        (pop result))
-     (prog1 (values-list result)
+     (multiple-value-prog1 (values-list result)
        (nhooks:run-hook *post-command-hook*))))
 
-#+nil (defmethod print-object ((object pipeline) stream)
-  (repl-connect object))
+;;; Fast loading command
+
+(nhooks:define-hook-type any->boolean (function (&rest t) boolean))
+(defvar *fast-load-functions*
+  (make-instance 'hook-any->boolean :combination #'nhooks:combine-hook-until-success))
+
+(defun read-shebang (stream)
+  (and (eq (read-byte stream nil 'eof) #\#)
+       (eq (read-byte stream nil 'eof) #\!)))
+
+(defun fast-load-sbcl-shebang (filename args)
+  (with-open-file (stream filename :element-type '(unsigned-byte 8))
+    (when (and (read-shebang stream)
+               (string= (read-line stream) "sbcl --script"))
+      (with-standard-io-syntax
+        (let ((sb-ext:*posix-argv* (cons filename args)))
+          (load stream))))))
+
+(nhooks:add-hook *fast-load-functions* 'fast-load-sbcl-shebang)
 
 ;;; Command syntax
 
