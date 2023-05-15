@@ -553,15 +553,16 @@ treatment if possible."
   (make-instance 'hook-any->boolean :combination #'nhooks:combine-hook-until-success))
 
 (defun read-shebang (stream)
-  (and (eq (read-byte stream nil 'eof) #\#)
-       (eq (read-byte stream nil 'eof) #\!)))
+  (and (eq (read-char stream nil 'eof) #\#)
+       (eq (read-char stream nil 'eof) #\!)))
 
 (defun fast-load-sbcl-shebang (filename args)
-  (with-open-file (stream filename :element-type '(unsigned-byte 8))
+  (with-open-file (stream filename :external-format :latin-1)
     (when (and (read-shebang stream)
-               (string= (read-line stream) "sbcl --script"))
+               (string= (read-line stream) "/usr/bin/env sbcl --script"))
       (with-standard-io-syntax
-        (let ((sb-ext:*posix-argv* (cons filename args)))
+        (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
+              (sb-ext:*posix-argv* (cons filename args)))
           (load stream))))))
 
 (nhooks:add-hook *fast-load-functions* 'fast-load-sbcl-shebang)
@@ -598,29 +599,32 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 
 (defun execute-command (command args &key (input :stream) (output :stream) (error *standard-output*))
   (let ((directory (uiop:absolute-pathname-p (unconvert-case (package-name *package*))))
+        (path (ensure-path command))
+        (args (map 'list #'to-argument args))
         input-1 output-1 error-1)
-    (unwind-protect
-         (progn
-           (psetq input-1 (read-fd-stream input)
-                  output-1 (write-fd-stream output)
-                  error-1 (write-fd-stream error))
-          (make-instance
-           'simple-process
-           :process
-           (sb-ext:run-program
-            (ensure-path command)
-            (map 'list #'to-argument args)
-            :wait nil
-            :input input-1 :output output-1 :error error-1
-            :directory directory
-            :environment (current-env))
-           :description (princ-to-string command)))
-      (when (streamp input-1)
-        (close input-1))
-      (when (streamp output-1)
-        (close output-1))
-      (when (streamp error-1)
-        (close error-1)))))
+    (if (nhooks:run-hook *fast-load-functions* path args)
+        (values)
+        (unwind-protect
+             (progn
+               (psetq input-1 (read-fd-stream input)
+                      output-1 (write-fd-stream output)
+                      error-1 (write-fd-stream error))
+               (make-instance
+                'simple-process
+                :process
+                (sb-ext:run-program
+                 path args
+                 :wait nil
+                 :input input-1 :output output-1 :error error-1
+                 :directory directory
+                 :environment (current-env))
+                :description (princ-to-string command)))
+          (when (streamp input-1)
+            (close input-1))
+          (when (streamp output-1)
+            (close output-1))
+          (when (streamp error-1)
+            (close error-1))))))
 
 (defun command-macro (form env)
   (declare (ignore env))
@@ -798,6 +802,7 @@ that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
     (restart-case (error 'already-installed)
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
+  (named-readtables:in-readtable unix-in-lisp)
   ;; Make UNIX-IN-LISP.COMMON first because FS packages in $PATH will
   ;; circularly reference UNIX-IN-LISP.COMMON
   (make-package "UNIX-IN-LISP.COMMON")
@@ -841,6 +846,5 @@ that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
 (defun setup ()
   (handler-case (install)
     (already-installed ()))
-  (named-readtables:in-readtable unix-in-lisp)
   (cd "~/")
   (values))
