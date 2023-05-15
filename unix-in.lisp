@@ -703,8 +703,12 @@ Currently, this is intended to be used for *both* /path syntax and
 (define-condition already-installed (error) ()
   (:report "There seems to be a previous Unix in Lisp installation."))
 
-(defvar *common-package-use-list*
-  '("UNIX-IN-LISP" "UNIX-IN-LISP.PATH" "SERAPEUM" "ALEXANDRIA" "CL"))
+(defun ensure-common-package (package-name)
+  (let ((use-list '(:unix-in-lisp :unix-in-lisp.path
+                    :serapeum :alexandria :cl)))
+    (uiop:ensure-package package-name
+                         :mix use-list
+                         :reexport use-list)))
 
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
@@ -720,8 +724,7 @@ Currently, this is intended to be used for *both* /path syntax and
                         (collect (mount-directory path))
                       (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
     (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
-  (uiop:ensure-package "UNIX-IN-LISP.COMMON" :mix *common-package-use-list*
-                                             :reexport *common-package-use-list*)
+  (ensure-common-package "UNIX-IN-LISP.COMMON")
   (defmethod print-object :around ((symbol symbol) stream)
     (if *print-escape*
         (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
