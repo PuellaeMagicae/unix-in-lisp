@@ -115,3 +115,25 @@ When using Unix in Lisp outside ~unix-in-slime~, use ~(unix-in-lisp:repl-connect
 unix-in-lisp> *jobs*
 (#<simple-process python3 (running) {1005BFFCF3}>)
 #+end_src
+** Environment
+Unix environment variables are mapped to special (dynamic-scope) Lisp variables.
+#+begin_src
+/Users/kchan> $logname
+"kchan"
+#+end_src
+
+You can set them or dynamically bind them
+#+begin_src
+/Users/kchan> (setf $test "42")
+"42"
+/Users/kchan> (pipe '("echo $TEST") (bash))
+42
+nil
+/Users/kchan> (let (($test "override")) (pipe '("echo $TEST") (bash)))
+override
+nil
+#+end_src
+
+The above works with the help of a reader macro defined on ~$~, which registers the following symbol as an environment variable. If you want to use Unix in Lisp environment variables without our readtable, you need to use function ~unix-in-lisp:ensure-env-var~ to register the symbol first. Consult its docstring for more information.
+
+Unix in Lisp keeps its own idea of a Unix environment, and pass to subprocesses created by it (e.g. via the macros it created from Unix commands). Other Lisp facilities (e.g. ~uiop:run-program~) does not know this, and usually inherit the "real" Unix environment of the Lisp process instead. To remedy this, Unix in Lisp provides function ~unix-in-lisp:synchronize-env-to-unix~ which copies the environment Unix in Lisp manages to the "real" Unix environment of the Lisp process. This is by default run in ~*post-command-hook*~, and you may want to call them before using other Lisp facilities that spawns Unix subprocesses.

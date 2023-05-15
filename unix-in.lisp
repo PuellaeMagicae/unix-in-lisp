@@ -3,11 +3,14 @@
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
                 #:concat #:string-prefix-p)
-  (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions)
+  (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
+                #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
-           #:repl-connect #:*jobs* #:define-env #:unset-env))
+           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
 
 (in-package #:unix-in-lisp)
+
+(defvar *post-command-hook* (make-instance 'nhooks:hook-void))
 
 ;;; File system
 
@@ -162,14 +165,12 @@ Return the symbol."
       (ensure-executable symbol))
     symbol))
 
+;; TODO: something more clever, maybe `fswatch'
 (defun remount-current-directory ()
   (when-let (pathname (package-path *package*))
     (mount-directory pathname)))
 
-;; TODO: something more clever, maybe `fswatch'
-(defvar *post-command-hook*
-  (make-instance 'nhooks:hook-void
-                 :handlers '(remount-current-directory)))
+(nhooks:add-hook *post-command-hook* 'remount-current-directory)
 
 ;;;; Structured file abstraction
 
@@ -542,7 +543,8 @@ treatment if possible."
               ,@body))))
      (when (repl-connect (car result))
        (pop result))
-     (values-list result)))
+     (prog1 (values-list result)
+       (nhooks:run-hook *post-command-hook*))))
 
 #+nil (defmethod print-object ((object pipeline) stream)
   (repl-connect object))
@@ -593,15 +595,15 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
             (map 'list #'to-argument args)
             :wait nil
             :input input-1 :output output-1 :error error-1
-            :directory directory)
+            :directory directory
+            :environment (current-env))
            :description (princ-to-string command)))
       (when (streamp input-1)
         (close input-1))
       (when (streamp output-1)
         (close output-1))
       (when (streamp error-1)
-        (close error-1))
-      (nhooks:run-hook *post-command-hook*))))
+        (close error-1)))))
 
 (defun command-macro (form env)
   (declare (ignore env))
@@ -693,11 +695,24 @@ Currently, this is intended to be used for *both* /path syntax and
           (file-error () symbol))
         symbol)))
 
+(defun dollar-read-macro (stream char)
+  "If we're reading a symbol that starts with `$', rehome it to
+`UNIX-IN-LISP.COMMON' and call `ensure-env-var'."
+  (unread-char char stream)
+  (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
+    (when (and (symbol-home-p symbol) (string-prefix-p "$" (symbol-name symbol)))
+      (unintern symbol)
+      (setq symbol (intern (symbol-name symbol) "UNIX-IN-LISP.COMMON"))
+      (export symbol "UNIX-IN-LISP.COMMON")
+      (ensure-env-var symbol))
+    symbol))
+
 (named-readtables:defreadtable readtable
   (:merge :fare-quasiquote)
   (:macro-char #\. 'dot-read-macro t)
   (:macro-char #\/ 'slash-read-macro t)
   (:macro-char #\~ 'slash-read-macro t)
+  (:macro-char #\$ 'dollar-read-macro t)
   (:case :invert))
 
 (defun unquote-reader-hook (orig thunk)
@@ -708,17 +723,9 @@ Currently, this is intended to be used for *both* /path syntax and
 
 ;;; Environment variables
 
-(defun getenv (x)
-  "We define our own getenv wrapper, because `uiop:getenv' does not
-follow usual `setf' convention."
-  (uiop:getenv x))
+(defvar *env-vars* nil)
 
-(defun (setf getenv) (new-val x)
-  (let ((return-code (setf (uiop:getenv x) new-val)))
-    (assert (= return-code 0))
-    new-val))
-
-(defun ensure-env (symbol &optional env)
+(defun ensure-env-var (symbol &optional env)
   (unless (string-prefix-p "$" (symbol-name symbol))
     (warn "~S is being defined as a Unix environment variable, but its name does
 not follow usual convention (like $~A)." symbol (symbol-name symbol)))
@@ -727,24 +734,24 @@ not follow usual convention (like $~A)." symbol (symbol-name symbol)))
         (setq env (subseq (symbol-name symbol) 1))
         (error "Please supply a Unix environment variable name for ~S, or use a symbol
 that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
-  (ensure-symbol-macro symbol `(getenv ,env)))
+  (proclaim `(special ,symbol))
+  (unless (boundp 'symbol)
+    (setf (symbol-value symbol) (or (uiop:getenv env) "")))
+  (setf (assoc-value *env-vars* symbol) env)
+  symbol)
 
-(defmacro define-env (symbol &optional env)
-  (setq symbol (ensure-env symbol env))
-  `(progn
-    (setf (get ',symbol 'env) ,env)
-    ',symbol))
+(defun current-env ()
+  (iter (for (symbol . name) in *env-vars*)
+    (when (boundp symbol)
+      (collect (concat name "=" (princ-to-string (symbol-value symbol)))))))
 
-(defun unset-env (symbol)
-  "Unset the Unix environment variable associated with SYMBOL.
+(defun synchronize-env-to-unix ()
+  (iter (for (symbol . name) in *env-vars*)
+    (if (boundp symbol)
+        (setf (uiop:getenv name) (princ-to-string (symbol-value symbol)))
+        (sb-posix:unsetenv name))))
 
-This also uninterns symbol, because it's otherwise impossible to clear
-the existing symbol macro associated with SYMBOL."
-  (let ((env (get symbol 'env)))
-    (unless env
-      (error "~S does not seem to be a Unix environment variable." symbol))
-    (sb-posix:unsetenv env)
-    (unintern symbol)))
+(nhooks:add-hook *post-command-hook* 'synchronize-env-to-unix)
 
 ;;; Installation/uninstallation
 
@@ -764,7 +771,7 @@ the existing symbol macro associated with SYMBOL."
                                        :reexport use-list)))
     (mapc (lambda (name)
             (let ((symbol (intern (concat "$" name) package) ))
-              (ensure-env symbol name)
+              (ensure-env-var symbol name)
               (export symbol package)))
           (get-env-names))
     package))
