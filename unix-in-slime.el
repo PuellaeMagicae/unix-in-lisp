@@ -40,6 +40,7 @@
     (comint-carriage-motion slime-output-start slime-output-end)
     (ansi-color-apply-on-region slime-output-start slime-output-end)))
 
+;;;###autoload
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp."
   (interactive)
