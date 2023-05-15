@@ -2,10 +2,10 @@
   (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
-                #:string-prefix-p)
+                #:concat #:string-prefix-p)
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
-           #:repl-connect #:*jobs*))
+           #:repl-connect #:*jobs* #:define-env #:unset-env))
 
 (in-package #:unix-in-lisp)
 
@@ -155,16 +155,8 @@ Return the symbol."
     (error 'file-does-not-exist :pathname filename))
   (bind (((directory . file) (ppath:split filename))
          (package (or (find-package (convert-case directory)) (mount-directory directory)))
-         (symbol (ensure-homed-symbol (convert-case file) package))
-         (binding-type (sb-cltl2:variable-information symbol)))
-    (cond ((or (not binding-type) (eq binding-type :symbol-macro))
-           (ensure-file-symbol-macro symbol))
-          (t (restart-case
-                 (error "Symbol ~S already has a ~A binding." symbol binding-type)
-               (reckless-continue () :report "Unintern the symbol and retry."
-                 (unintern symbol)
-                 (return-from mount-file
-                   (mount-file filename))))))
+         (symbol (ensure-homed-symbol (convert-case file) package)))
+    (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
     (export symbol (symbol-package symbol))
     (when (uiop:file-exists-p filename)
       (ensure-executable symbol))
@@ -200,14 +192,29 @@ Return the symbol."
 (defmacro file (symbol)
   `(access-file (ensure-path ',symbol)))
 
-(defun ensure-file-symbol-macro (symbol)
-  (eval `(define-symbol-macro ,symbol (access-file (symbol-path ',symbol)))))
+(defun reintern-symbol (symbol)
+  "Unintern SYMBOL, and intern a symbol with the same name and home
+package as SYMBOL.  This is useful for \"clearing\" any bindings.
+Code should then use the returned symbol in place of SYMBOL."
+  (let ((package (symbol-package symbol)))
+    (unintern symbol package)
+    (intern (symbol-name symbol) package)))
+
+(defun ensure-symbol-macro (symbol form)
+  (let ((binding-type (sb-cltl2:variable-information symbol)))
+    (cond ((or (not binding-type) (eq binding-type :symbol-macro))
+           (eval `(define-symbol-macro ,symbol ,form)))
+          (t (restart-case
+                 (error "Symbol ~S already has a ~A binding." symbol binding-type)
+               (reckless-continue () :report "Unintern the symbol and retry."
+                 (ensure-symbol-macro (reintern-symbol symbol) form)))))))
 
 (defmacro defile (symbol &optional initform)
-  `(let ((%symbol (canonical-symbol ',symbol)))
-     (ensure-file-symbol-macro %symbol)
-     ,(when initform `(setf (access-file (symbol-path %symbol)) ,initform))
-     %symbol))
+  (setq symbol (canonical-symbol symbol))
+  (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
+  `(progn
+     ,(when initform `(setf ,symbol ,initform))
+     ',symbol))
 
 ;;; FD watcher
 
@@ -699,17 +706,68 @@ Currently, this is intended to be used for *both* /path syntax and
         (funcall orig thunk))
       (funcall orig thunk)))
 
+;;; Environment variables
+
+(defun getenv (x)
+  "We define our own getenv wrapper, because `uiop:getenv' does not
+follow usual `setf' convention."
+  (uiop:getenv x))
+
+(defun (setf getenv) (new-val x)
+  (let ((return-code (setf (uiop:getenv x) new-val)))
+    (assert (= return-code 0))
+    new-val))
+
+(defun ensure-env (symbol &optional env)
+  (unless (string-prefix-p "$" (symbol-name symbol))
+    (warn "~S is being defined as a Unix environment variable, but its name does
+not follow usual convention (like $~A)." symbol (symbol-name symbol)))
+  (unless env
+    (if (string-prefix-p "$" (symbol-name symbol))
+        (setq env (subseq (symbol-name symbol) 1))
+        (error "Please supply a Unix environment variable name for ~S, or use a symbol
+that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
+  (ensure-symbol-macro symbol `(getenv ,env)))
+
+(defmacro define-env (symbol &optional env)
+  (setq symbol (ensure-env symbol env))
+  `(progn
+    (setf (get ',symbol 'env) ,env)
+    ',symbol))
+
+(defun unset-env (symbol)
+  "Unset the Unix environment variable associated with SYMBOL.
+
+This also uninterns symbol, because it's otherwise impossible to clear
+the existing symbol macro associated with SYMBOL."
+  (let ((env (get symbol 'env)))
+    (unless env
+      (error "~S does not seem to be a Unix environment variable." symbol))
+    (sb-posix:unsetenv env)
+    (unintern symbol)))
+
 ;;; Installation/uninstallation
 
 (define-condition already-installed (error) ()
   (:report "There seems to be a previous Unix in Lisp installation."))
 
+(defun get-env-names ()
+  (mapcar (lambda (s)
+            (subseq s 0 (position #\= s)))
+          (sb-ext:posix-environ)))
+
 (defun ensure-common-package (package-name)
-  (let ((use-list '(:unix-in-lisp :unix-in-lisp.path
-                    :serapeum :alexandria :cl)))
-    (uiop:ensure-package package-name
-                         :mix use-list
-                         :reexport use-list)))
+  (bind ((use-list '(:unix-in-lisp :unix-in-lisp.path
+                     :serapeum :alexandria :cl))
+         (package (uiop:ensure-package package-name
+                                       :mix use-list
+                                       :reexport use-list)))
+    (mapc (lambda (name)
+            (let ((symbol (intern (concat "$" name) package) ))
+              (ensure-env symbol name)
+              (export symbol package)))
+          (get-env-names))
+    package))
 
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
