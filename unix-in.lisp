@@ -593,7 +593,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
       (when (streamp output-1)
         (close output-1))
       (when (streamp error-1)
-        (close error-1)))))
+        (close error-1))
+      (nhooks:run-hook *post-command-hook*))))
 
 (defun command-macro (form env)
   (declare (ignore env))
