@@ -290,7 +290,7 @@ mechanisms."
 
 (defvar *jobs* nil)
 
-;;; Pipeline actor
+;;; Effective Process
 
 ;;;; Abstract interactive process
 (defclass process-mixin (native-lazyseq:lazy-seq)
@@ -707,7 +707,7 @@ Currently, this is intended to be used for *both* /path syntax and
       (ensure-env-var symbol))
     symbol))
 
-(named-readtables:defreadtable readtable
+(named-readtables:defreadtable unix-in-lisp
   (:merge :fare-quasiquote)
   (:macro-char #\. 'dot-read-macro t)
   (:macro-char #\/ 'slash-read-macro t)
@@ -781,7 +781,6 @@ that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
     (restart-case (error 'already-installed)
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
-  (named-readtables:in-readtable readtable)
   ;; Make UNIX-IN-LISP.COMMON first because FS packages in $PATH will
   ;; circularly reference UNIX-IN-LISP.COMMON
   (make-package "UNIX-IN-LISP.COMMON")
@@ -825,6 +824,6 @@ that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
 (defun setup ()
   (handler-case (install)
     (already-installed ()))
-  (named-readtables:in-readtable readtable)
+  (named-readtables:in-readtable unix-in-lisp)
   (cd "~/")
   (values))
