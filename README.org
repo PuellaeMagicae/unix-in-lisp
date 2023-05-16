@@ -99,7 +99,7 @@ Hello world!
 1. ~BACKGROUND~ puts the job in background (accessible via ~unix-in-lisp:*jobs*~)
 2. ~ABORT~ terminates the current job (via ~SIGTERM~ for Unix processes)
 
-*Attention:* You have use ~-i~ flag to start Python REPL because Unix in Lisp currently talk to all processes using pipe rather than pseudo tty. Without ~-i~, Python will start itself into non-interactive mode. Other REPLs may need respective flags.
+*Attention:* You have to use ~-i~ flag to start Python REPL, because Unix in Lisp currently talk to all processes using pipe rather than pseudo tty. Without ~-i~, Python will start itself into non-interactive mode. Other REPLs may need respective flags.
 
 When using Unix in Lisp outside ~unix-in-slime~, use ~(unix-in-lisp:repl-connect <process>)~ to achieve the same thing.
 
