@@ -763,7 +763,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 
 ;;; Built-in commands
 
-(defmacro cd (path)
+(defmacro cd (&optional (path "~"))
   `(setq *package* (mount-directory ,(list 'fare-quasiquote:quasiquote path))))
 
 ;;; Reader syntax hacks
