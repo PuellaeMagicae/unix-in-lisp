@@ -723,7 +723,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
             (close error-1))))))
 
 (defun command-macro (form env)
-  (declare (ignore env))
+  (declare (ignore env)
+           (sb-c::lambda-list (&rest args)))
   (bind (((command . args) form)
          ((:values plist command-args) (split-args args)))
     ;; The following macrolet make ,@<some-sequence> work, just like
