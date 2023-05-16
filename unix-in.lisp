@@ -237,7 +237,7 @@ entire input is seen, i.e. until EOF)."
     (setf *fd-watcher-event-base* (make-instance 'iolib:event-base)))
   (unless (and *fd-watcher-thread*
                (bt:thread-alive-p *fd-watcher-thread*))
-    (setf *fd-watcher-thread* (bt:make-thread #'fd-watcher))))
+    (setf *fd-watcher-thread* (bt:make-thread #'fd-watcher :name "Unix in Lisp FD watcher"))))
 
 (defun cleanup-fd-watcher ()
   "Remove and close all file descriptors from `*fd-watcher-event-base*'.
@@ -460,6 +460,19 @@ setup before we add it to *jobs*."
                ,@bt:*default-special-bindings*)))))
   (call-next-method))
 
+(defmethod process-wait ((p lisp-process))
+  (ignore-errors (bt:join-thread (thread p))))
+
+(defmethod close ((p lisp-process) &key abort)
+  (when abort
+    (bt:interrupt-thread
+     (thread p)
+     (lambda ()
+       (sb-thread:abort-thread))))
+  (ignore-errors (close (process-input p)))
+  (ignore-errors (close (process-output p)))
+  (ignore-errors (bt:join-thread (thread p))))
+
 ;;;; Process I/O streams
 
 (defgeneric read-fd-stream (object)
@@ -558,12 +571,14 @@ types of objects."))
                  ;; wait for output to finish reading
                  (loop (sleep 0.1)))
                 (t (process-wait p))))
-      (background () :report "Run process in background."
+      (background () :report "Run job in background."
         (when read-stream
           (iolib:remove-fd-handlers
            *fd-watcher-event-base*
            (sb-sys:fd-stream-fd read-stream))
-          (setf (process-output p) read-stream)))))
+          (setf (process-output p) read-stream)))
+      (abort () :report "Abort job."
+        (close p :abort t))))
   t)
 
 (defmethod repl-connect ((s native-lazyseq:lazy-seq))
