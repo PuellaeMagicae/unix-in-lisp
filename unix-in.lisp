@@ -539,15 +539,18 @@ types of objects."))
           (lambda ()
             (ignore-errors (throw 'finish nil)))))))
     (catch 'finish
-      (if (process-input p)
-          (loop
-            (handler-case
-                (write-char (read-char) (process-input p))
-              (end-of-file ()
-                (close (process-input p))
-                (return)))
-            (force-output (process-input p)))
-          (loop (sleep 0.1)))))
+      (cond ((process-input p)
+             (loop
+               (handler-case
+                   (write-char (read-char) (process-input p))
+                 (end-of-file ()
+                   (close (process-input p))
+                   (return)))
+               (force-output (process-input p))))
+            ((process-output p)
+             ;; wait for output to finish reading
+             (loop (sleep 0.1)))
+            (t (process-wait p)))))
   t)
 
 (defmethod repl-connect ((s native-lazyseq:lazy-seq))
