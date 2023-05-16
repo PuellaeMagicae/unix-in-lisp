@@ -95,7 +95,9 @@ Hello world!
 /Users/kchan>
 #+end_src
 
-*Attention:* use ~C-u RET~ to signal EOF in ~unix-in-slime~, similar to ~Ctrl+D~ in POSIX shells.
+*Attention:* use ~C-u RET~ to signal EOF in ~unix-in-slime~, similar to ~Ctrl+D~ in POSIX shells. You can interrupt evaluation via ~C-c C-c~ like usual, after which you will be provided a few restarts:
+1. ~BACKGROUND~ puts the job in background (accessible via ~unix-in-lisp:*jobs*~)
+2. ~ABORT~ terminates the current job (via ~SIGTERM~ for Unix processes)
 
 *Attention:* You have use ~-i~ flag to start Python REPL because Unix in Lisp currently talk to all processes using pipe rather than pseudo tty. Without ~-i~, Python will start itself into non-interactive mode. Other REPLs may need respective flags.
 
@@ -106,6 +108,11 @@ When using Unix in Lisp outside ~unix-in-slime~, use ~(unix-in-lisp:repl-connect
 unix-in-lisp> *jobs*
 (#<simple-process python3 (running) {1005BFFCF3}>)
 #+end_src
+Note that because ~unix-in-slime~ listener connects a job automatically if it is the primary value of evaluation, you can use e.g.
+#+begin_src
+unix-in-lisp> (nth 0 *jobs*)
+#+end_src
+to resume from a background job.
 ** Environment
 Unix environment variables are mapped to special (dynamic-scope) Lisp variables.
 #+begin_src
