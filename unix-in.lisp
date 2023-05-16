@@ -254,13 +254,16 @@ This is unsafe, for debug purpose only."
   (bt:destroy-thread *fd-watcher-thread*)
   (close *fd-watcher-event-base*))
 
-(defun copy-fd-to-stream (read-fd stream &optional (continuation (lambda ())))
-  "Copy characters from READ-FD to STREAM.
+(defun copy-fd-to-stream (read-fd-or-stream stream &optional (continuation (lambda ())))
+  "Copy characters from READ-FD-OR-STREAM to STREAM.
 Characters are copied and FORCE-OUTPUT as soon as possible, making it
 more suitable for interactive usage than some implementation provided
 mechanisms."
   (declare (type function continuation))
-  (bind ((read-stream (sb-sys:make-fd-stream read-fd :input t))
+  (bind (((:values read-fd read-stream)
+          (if (streamp read-fd-or-stream)
+              (values (sb-sys:fd-stream-fd read-fd-or-stream) read-fd-or-stream)
+              (values read-fd-or-stream (sb-sys:make-fd-stream read-fd-or-stream :input t))))
          ((:labels clean-up ())
           (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
           (close read-stream)
@@ -283,8 +286,8 @@ mechanisms."
      (lambda (fd event error)
        (unless (eq event :read)
          (warn "FD watcher ~A get ~A ~A" fd event error))
-       (read-data))))
-  (values))
+       (read-data)))
+    (values)))
 
 ;;; Job control
 
@@ -528,29 +531,39 @@ types of objects."))
 
 (defmethod repl-connect ((p process-mixin))
   "Connect `*standard-input*' and `*standard-output*' to P's input/output."
-  (let ((repl-thread (bt:current-thread)))
+  (let ((repl-thread (bt:current-thread))
+        read-stream)
     (when (process-output p)
+      (setf read-stream (process-output p)
+            (process-output p) nil)
       (copy-fd-to-stream
-       (sb-sys:fd-stream-fd (process-output p))
+       read-stream
        *standard-output*
        (lambda ()
          (bt:interrupt-thread
           repl-thread
           (lambda ()
             (ignore-errors (throw 'finish nil)))))))
-    (catch 'finish
-      (cond ((process-input p)
-             (loop
-               (handler-case
-                   (write-char (read-char) (process-input p))
-                 (end-of-file ()
-                   (close (process-input p))
-                   (return)))
-               (force-output (process-input p))))
-            ((process-output p)
-             ;; wait for output to finish reading
-             (loop (sleep 0.1)))
-            (t (process-wait p)))))
+    (restart-case
+        (catch 'finish
+          (cond ((process-input p)
+                 (loop
+                   (handler-case
+                       (write-char (read-char) (process-input p))
+                     (end-of-file ()
+                       (close (process-input p))
+                       (return)))
+                   (force-output (process-input p))))
+                ((process-output p)
+                 ;; wait for output to finish reading
+                 (loop (sleep 0.1)))
+                (t (process-wait p))))
+      (background () :report "Run process in background."
+        (when read-stream
+          (iolib:remove-fd-handlers
+           *fd-watcher-event-base*
+           (sb-sys:fd-stream-fd read-stream))
+          (setf (process-output p) read-stream)))))
   t)
 
 (defmethod repl-connect ((s native-lazyseq:lazy-seq))
