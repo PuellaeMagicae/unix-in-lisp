@@ -74,6 +74,12 @@
 
 (add-hook 'kill-buffer-hook #'unix-in-slime-disconnect-maybe)
 
+(defun unix-in-slime-repl-setup ()
+  (when (unix-in-slime-p)
+    (rename-buffer "*unix-in-slime*" t)))
+
+(add-hook 'slime-repl-mode-hook #'unix-in-slime-repl-setup)
+
 (define-advice slime-repl-insert-prompt
     (:after () unix-in-slime)
   (let ((prompt (slime-lisp-package-prompt-string)))
