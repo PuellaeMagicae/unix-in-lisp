@@ -32,7 +32,6 @@
 (require 'ansi-color)
 (require 'nadvice)
 (require 'slime)
-(require 'slime-mrepl)
 
 (define-advice slime-repl-emit
     (:after (string) unix-in-slime)
@@ -40,42 +39,47 @@
     (comint-carriage-motion slime-output-start slime-output-end)
     (ansi-color-apply-on-region slime-output-start slime-output-end)))
 
+(defvar unix-in-slime-port nil)
+
 ;;;###autoload
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp."
   (interactive)
-  (require 'slime-company)
-  (require 'slime-autodoc)
-  (add-to-list 'slime-company-major-modes 'slime-mrepl-mode)
-  (add-hook 'slime-mrepl-mode-hook #'slime-company-maybe-enable)
-  (add-hook 'slime-mrepl-mode-hook #'slime-autodoc-mode)
   (if (slime-connected-p)
-      (progn
-        (slime-enable-contrib 'slime-mrepl)
-        (let ((channel (slime-make-channel slime-listener-channel-methods)))
-          (slime-eval-async
-              `(swank-mrepl:create-mrepl ,(slime-channel.id channel))
-            (slime-rcurry
-             (lambda (result channel)
-               (cl-destructuring-bind (remote thread-id package prompt) result
-                 (pop-to-buffer (generate-new-buffer (slime-buffer-name :mrepl)))
-                 (slime-mrepl-mode)
-                 (setq slime-current-thread thread-id)
-                 (setq slime-buffer-connection (slime-connection))
-                 (set (make-local-variable 'slime-mrepl-remote-channel) remote)
-                 (slime-channel-put channel 'buffer (current-buffer))
-                 (slime-mrepl-send
-                  '(:process "(cl:progn
- (ql:quickload \"unix-in-lisp\")
- (cl:funcall (cl:find-symbol \"SETUP\" \"UNIX-IN-LISP\")))"))))
-             channel))))
-      (save-selected-window (slime-start :init-function #'unix-in-slime))))
+      (slime-eval-async
+          '(cl:progn
+            (asdf:require-system "unix-in-lisp")
+            (cl:funcall (cl:find-symbol "INSTALL" "UNIX-IN-LISP") t)
+            (cl:or (cl:symbol-value (cl:find-symbol "*SWANK-PORT*" "UNIX-IN-LISP"))
+                   (cl:set (cl:find-symbol "*SWANK-PORT*" "UNIX-IN-LISP")
+                           (swank:create-server :dont-close t))))
+        (lambda (port)
+          (setq unix-in-slime-port port)
+          ;; don't let `slime-connect' change default connection
+          (let ((slime-default-connection slime-default-connection))
+            (slime-connect "localhost" port)
+            (slime-eval-async
+                '(cl:funcall (cl:find-symbol "SETUP" "UNIX-IN-LISP"))))))
+    (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
-(define-advice slime-mrepl-prompt
-    (:after (package prompt) unix-in-slime)
-  (when (file-name-absolute-p prompt)
-    (setq-local default-directory
-                (substring (file-name-concat (slime-eval `(unix-in-lisp::unconvert-case ,prompt)) "x") 0 -1))))
+(defun unix-in-slime-p ()
+  (when (and unix-in-slime-port (slime-connection))
+    (equal (cadr (process-contact (slime-connection)))
+           unix-in-slime-port)))
+
+(defun unix-in-slime-disconnect-maybe ()
+  (when (and (derived-mode-p 'slime-repl-mode) (unix-in-slime-p))
+    (remove-hook 'kill-buffer-hook 'unix-in-slime-disconnect-maybe t)
+    (slime-disconnect)))
+
+(add-hook 'kill-buffer-hook #'unix-in-slime-disconnect-maybe)
+
+(define-advice slime-repl-insert-prompt
+    (:after () unix-in-slime)
+  (let ((prompt (slime-lisp-package-prompt-string)))
+    (when (file-name-absolute-p prompt)
+      (setq-local default-directory
+                  (substring (file-name-concat prompt "x") 0 -1)))))
 
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here
