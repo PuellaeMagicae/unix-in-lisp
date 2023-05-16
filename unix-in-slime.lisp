@@ -50,6 +50,7 @@
            (= port *swank-port*)))))
 
 (defun swank-eval-region-hook (orig string)
+  "Wrap forms to be evaluated with `toplevel' macro."
   (if (unix-in-slime-p)
       (with-input-from-string (stream string)
         (let (- values)
@@ -64,12 +65,18 @@
       (funcall orig string)))
 
 (defun swank-add-connection-hook (orig conn)
+  "Add Unix in SLIME connection to the last of `swank::*connections*',
+so that we never automatically become the default REPL."
   (if (unix-in-slime-p conn)
       (swank::with-lock swank::*connection-lock*
         (alexandria:nconcf swank::*connections* (list conn)))
       (funcall orig conn)))
 
 (defun swank-globally-redirect-io-p-hook (orig)
+  "Disable swank global redirection mechanism for Unix in Slime
+connection, because it does not support multiple listeners well
+(its synonym streams redirect to global variables and are not
+thread-local/connection-local)."
   (unless (unix-in-slime-p)
     (funcall orig)))
 
