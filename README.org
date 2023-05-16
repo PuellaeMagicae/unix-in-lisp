@@ -1,5 +1,14 @@
 #+TITLE: Unix in Lisp - mount Unix into Common Lisp image
 Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinctive feature of Unix in Lisp is that rather than creating a sub-language for Unix operations, Unix concepts are directly/shallowly embedded into Lisp (e.g. Unix commands become Lisp macros).
+* Table of Contents :TOC:
+- [[#quick-start][Quick Start]]
+  - [[#examples][Examples]]
+- [[#documentation][Documentation]]
+  - [[#file-system-mapping][File System Mapping]]
+  - [[#command-and-process-mapping][Command and Process Mapping]]
+  - [[#environment][Environment]]
+  - [[#scripting-blazingly-fast-start-up][Scripting (blazingly fast start up)]]
+
 * Quick Start
 Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazyseq]] into =~/quicklisp/local-projects/=.
 
@@ -135,3 +144,18 @@ nil
 The above works with the help of a reader macro defined on ~$~, which registers the following symbol as an environment variable. If you want to use Unix in Lisp environment variables without our readtable, you need to use function ~unix-in-lisp:ensure-env-var~ to register the symbol first. Consult its docstring for more information.
 
 Unix in Lisp keeps its own idea of a Unix environment, and pass to subprocesses created by it (e.g. via the macros it created from Unix commands). Other Lisp facilities (e.g. ~uiop:run-program~) does not know this, and usually inherit the "real" Unix environment of the Lisp process instead. To remedy this, Unix in Lisp provides function ~unix-in-lisp:synchronize-env-to-unix~ which copies the environment Unix in Lisp manages to the "real" Unix environment of the Lisp process. This is by default run in ~*post-command-hook*~, and you may want to call them before using other Lisp facilities that spawns Unix subprocesses.
+** Scripting (blazingly fast start up)
+The recommended way to write scripts is to create executable files (say ~do-stuff.sh~) with contents like
+#+begin_src
+#!/usr/env/bin sbcl --script
+(asdf:require-system "<dependency>")
+(asdf:require-system "unix-in-lisp")
+(unix-in-lisp:setup)
+<do-stuff>
+#+end_src
+
+The benefit of the above approach is that it is blazingly fast when started from within Unix in Lisp (via e.g. ~(do-stuff.sh)~), because Unix in Lisp has a /Fast loading command/ mechanism, which can execute the script within Unix in Lisp image without starting subprocess if it detects a Lisp shebang. The essence of writing fast startup script is:
+1. Use ~#!/usr/env/bin sbcl --script~ shebang. Currently it has to be an exact match.
+2. Use ~asdf:require-system~. This avoids scanning the ASDF registry directory tree for modification, which wastes significant time!
+
+On my machine, a hello world using the above approach run in 0.5ms, while Python 3 uses 30ms!
