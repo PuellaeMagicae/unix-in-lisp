@@ -411,6 +411,54 @@ setup before we add it to *jobs*."
 (defmethod description ((p pipeline))
   (serapeum:string-join (mapcar #'description (processes p)) ","))
 
+;;;; Lisp process
+(defclass lisp-process (process-mixin)
+  ((thread :reader thread)
+   (input :accessor process-input)
+   (output :accessor process-output)
+   (function :reader process-function)
+   (status :reader process-status)
+   (description :reader description :initarg :description))
+  (:default-initargs :description "lisp"))
+
+(defmethod initialize-instance
+    ((p lisp-process) &key (function :function)
+                        (input :stream) (output :stream) (error *standard-output*))
+  (flet ((pipe ()
+           (bind (((:values read-fd write-fd) (osicat-posix:pipe)))
+             (values (sb-sys:make-fd-stream read-fd :input t :auto-close t)
+                     (sb-sys:make-fd-stream write-fd :output t :auto-close t)))))
+    (let (stdin stdout)
+      (setf (values stdin (slot-value p 'input))
+            (if (eq input :stream)
+                (pipe)
+                (values (read-fd-stream input) nil)))
+      (setf (values (slot-value p 'output) stdout)
+            (if (eq input :stream)
+                (pipe)
+                (values nil (write-fd-stream output))))
+      (when (eq error :output)
+        (setq error stdout))
+      (setf (slot-value p 'function) function
+            (slot-value p 'status) :running
+            (slot-value p 'thread)
+            (bt:make-thread
+             (lambda ()
+               (unwind-protect
+                    (funcall function)
+                 (close stdin)
+                 (close stdout)
+                 (setf (slot-value p 'status) :exited)
+                 (nhooks:run-hook (status-change-hook p))))
+             :initial-bindings
+             `((*standard-input* . ,stdin)
+               (*standard-output* . ,stdout)
+               (*trace-output* . ,error)
+               ,@bt:*default-special-bindings*)))))
+  (call-next-method))
+
+;;;; Process I/O streams
+
 (defgeneric read-fd-stream (object)
   (:documentation "Return a fd-stream for reading cotents from OBJECT.
 The returned fd-stream is intended to be passed to a child process,
@@ -418,10 +466,10 @@ and will be closed after child process creation.")
   (:method ((object (eql :stream))) :stream)
   (:method ((p process-mixin))
     (prog1
-        (process-output p)
+        (read-fd-stream (process-output p))
+      ;; The consumer takes the output stream exclusively
       (setf (process-output p) nil)))
-  (:method ((stream sb-sys:fd-stream))
-    stream)
+  (:method ((s sb-sys:fd-stream)) s)
   (:method ((p sequence))
     (native-lazyseq:with-iterators (element next endp) p
       (bind (((:values read-fd write-fd) (osicat-posix:pipe))
@@ -461,7 +509,8 @@ and will be closed after child process creation.")
   (:method ((object (eql :output))) :output)
   (:method ((p process-mixin))
     (prog1
-        (process-input p)
+        (write-fd-stream (process-input p))
+      ;; The producer takes the output stream exclusively
       (setf (process-input p) nil)))
   (:method ((s sb-sys:fd-stream)) s)
   (:method ((s stream))
@@ -535,35 +584,50 @@ Common Lisp)."
 1. Use `compute-lexifications' to support relative symbol accesses.
 2. Use `repl-connect' to give returned primary value special
 treatment if possible."
-  `(let ((result
-           (multiple-value-list
-            (symbol-macrolet
-                ,(mapcar (lambda (pair) (list (car pair) (cdr pair)))
-                         (compute-lexifications body))
-              ,@body))))
-     (when (repl-connect (car result))
-       (pop result))
-     (multiple-value-prog1 (values-list result)
-       (nhooks:run-hook *post-command-hook*))))
+  (let ((lex (compute-lexifications body)))
+    `(let ((result
+             (multiple-value-list
+              (symbol-macrolet
+                  ,(iter (for (from . to) in lex)
+                     (collect `(,from ,to)))
+                (macrolet
+                    ,(iter (for (from . to) in lex)
+                       (collect `(,from (&rest args) `(,',to ,@args))))
+                  ,@body)))))
+       (when (repl-connect (car result))
+         (pop result))
+       (multiple-value-prog1 (values-list result)
+         (nhooks:run-hook *post-command-hook*)))))
 
 ;;; Fast loading command
 
-(nhooks:define-hook-type any->boolean (function (&rest t) boolean))
 (defvar *fast-load-functions*
-  (make-instance 'hook-any->boolean :combination #'nhooks:combine-hook-until-success))
+  (make-instance 'nhooks:hook-any :combination #'nhooks:combine-hook-until-success))
 
 (defun read-shebang (stream)
   (and (eq (read-char stream nil 'eof) #\#)
        (eq (read-char stream nil 'eof) #\!)))
 
-(defun fast-load-sbcl-shebang (filename args)
-  (with-open-file (stream filename :external-format :latin-1)
-    (when (and (read-shebang stream)
-               (string= (read-line stream) "/usr/bin/env sbcl --script"))
-      (with-standard-io-syntax
-        (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
-              (sb-ext:*posix-argv* (cons filename args)))
-          (load stream))))))
+(defun fast-load-sbcl-shebang (filename args &key input output error directory)
+  (let ((stream (open filename :external-format :latin-1)))
+    (if (ignore-errors
+         (and (read-shebang stream)
+              (string= (read-line stream) "/usr/bin/env sbcl --script")))
+        (make-instance 'lisp-process
+                       :function
+                       (lambda ()
+                         (unwind-protect
+                              (uiop:with-current-directory (directory)
+                                (with-standard-io-syntax
+                                  (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
+                                        (sb-ext:*posix-argv* (cons filename args)))
+                                    (load stream))))
+                           (close stream)))
+                       :description (cdr (ppath:split filename))
+                       :input input :output output :error error)
+        (progn
+          (close stream)
+          nil))))
 
 (nhooks:add-hook *fast-load-functions* 'fast-load-sbcl-shebang)
 
@@ -598,12 +662,13 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
     (finally (return (values plist rest)))))
 
 (defun execute-command (command args &key (input :stream) (output :stream) (error *standard-output*))
-  (let ((directory (uiop:absolute-pathname-p (unconvert-case (package-name *package*))))
+  (let ((directory (uiop:absolute-pathname-p (to-dir (unconvert-case (package-name *package*)))))
         (path (ensure-path command))
         (args (map 'list #'to-argument args))
         input-1 output-1 error-1)
-    (if (nhooks:run-hook *fast-load-functions* path args)
-        (values)
+    (or (nhooks:run-hook *fast-load-functions* path args
+                         :input input :output output :error error
+                         :directory directory)
         (unwind-protect
              (progn
                (psetq input-1 (read-fd-stream input)
