@@ -100,7 +100,9 @@ thread-local/connection-local)."
   (cl-advice:add-advice :around #+swank 'swank-repl::eval-region
                                 'swank-eval-region-hook)
   (cl-advice:add-advice :around #+swank 'swank-repl::globally-redirect-io-p
-                                'swank-globally-redirect-io-p-hook))
+                                'swank-globally-redirect-io-p-hook)
+
+  (setq swank::*auto-abbreviate-dotted-packages* nil))
 
 (defun slime-uninstall ()
   (cl-advice:remove-advice :around #+swank 'swank-repl::globally-redirect-io-p
