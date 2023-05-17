@@ -579,7 +579,7 @@ types of objects."))
                      ((process-output p)
                       ;; wait for output to finish reading
                       (loop (sleep 0.1)))
-                     (t (process-wait p))))
+                     (t (return-from repl-connect nil))))
           (when read-stream
                (iolib:remove-fd-handlers
                 *fd-watcher-event-base*

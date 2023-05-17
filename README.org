@@ -93,7 +93,7 @@ The ~_~ extension make it easy to add Lisp functions to the mix:
 #+end_src
 The above counts the number of file with filename longer than 10 under my home directory.
 *** Interactive Use
-Inside a ~unix-in-slime~ listener, if the primary value of evaluation is an effective process, ~unix-in-slime~ automatically "connect" it to the listener, i.e. I/O of the listener is redirected to the process, similar to /foreground processes/ in POSIX shell:
+Inside a ~unix-in-slime~ listener, if the primary value of evaluation is an effective process and it has avaliable input/output streams, ~unix-in-slime~ automatically "connect" it to the listener, i.e. I/O of the listener is redirected to the process, similar to /foreground processes/ in POSIX shell:
 #+begin_src
 /Users/kchan> (python3 -i)
 Python 3.8.9 (default, Apr 13 2022, 08:48:07)
@@ -123,6 +123,8 @@ Note that because ~unix-in-slime~ listener connects a job automatically if it is
 unix-in-lisp> (nth 0 *jobs*)
 #+end_src
 to resume from a background job.
+
+~unix-in-lisp:repl-connect~ connects a process exclusively in at most one listener. If a process is already connected in other listener, it will do nothing and the effective process object will be printed like normal. In fact, many Unix in Lisp operations (including ~repl-connect~ and ~pipe~) takes exclusive access of input/output stream of processes (by setting the respective slots to ~nil~ during their course of operation).
 ** Environment
 Unix environment variables are mapped to special (dynamic-scope) Lisp variables.
 #+begin_src
