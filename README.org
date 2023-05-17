@@ -1,14 +1,21 @@
+# -*- toc-org-max-depth: 3; -*-
 #+TITLE: Unix in Lisp - mount Unix into Common Lisp image
-Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinctive feature of Unix in Lisp is that rather than creating a sub-language for Unix operations, Unix concepts are directly/shallowly embedded into Lisp (e.g. Unix commands become Lisp macros).
+Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinctive feature of Unix in Lisp is that rather than creating a sub-language for Unix operations, Unix concepts are directly/shallowly embedded into Lisp (Unix commands become Lisp macros, Unix file become Lisp variables, etc).
+
 * Table of Contents :TOC:
 - [[#quick-start][Quick Start]]
   - [[#examples][Examples]]
 - [[#documentation][Documentation]]
   - [[#file-system-mapping][File System Mapping]]
   - [[#command-and-process-mapping][Command and Process Mapping]]
+    - [[#simple-commands][Simple commands]]
+    - [[#pipeline][Pipeline]]
+    - [[#interactive-use][Interactive Use]]
   - [[#environment][Environment]]
   - [[#scripting-blazingly-fast-start-up][Scripting (blazingly fast start up)]]
   - [[#unix-in-slime][Unix in SLIME]]
+    - [[#performance-fast][Performance: fast!]]
+    - [[#completion][Completion]]
 
 * Quick Start
 Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazy-seq]] into =~/quicklisp/local-projects/=.
@@ -166,5 +173,9 @@ On my machine, a hello world using the above approach run in 0.5ms, while Python
 The above documentations have been assuming you are using the ~unix-in-slime~ listener. Here we document some additional aspects of ~unix-in-slime~.
 
 Unix in Lisp assumes a dedicated swank server for ~unix-in-slime~ listeners (and potentially other front-ends in the future). ~M-x unix-in-slime~ will start one on ~unix-in-slime-default-port~ (4010 by default) if none already exists in the Unix in Lisp image. The server handles multiple connections, so you can safely start multiple ~unix-in-slime~ listeners simultaneously, like how you must have lived with multiple terminal windows.
+
+*** Performance: fast!
+A quite unintended achievement is that ~unix-in-slime~ is a very fast shell for Emacs. In fact, a simple ~(pipe "time for i in {0..99999}; do echo line $i; done" (sh))~ benchmark takes 0.83s in ~unix-in-slime~, and takes 2.93s in ~vterm~. ~unix-in-slime~ is more than 3 times faster than one of the fastest Emacs terminal emulator (partly written in C)! Of course, this is not a head-to-head comparison because ~vterm~ is a terminal emulator while ~unix-in-slime~ is a shell, but I did frequent experience fast command outputs choking Emacs and it's good to know ~unix-in-slime~ is pretty good at handle these. I think the reason is that SLIME's swank server does some very Emacs-specific tuning, e.g. limiting network packet rate because it knows Emacs choke on a flood of them, which also benefits us when we use it as a shell.
+
 *** Completion
 If you have configured completion for SLIME itself, completion works out of the box for ~unix-in-slime~. Note that we automagically get "filename completion", because they are mapped as symbols, and we have symbol completion at home! Currently there's one quirk: filenames are always completed to their full resolved absolute path, because that's what corresponds to symbols. I'd say it's either a bug or a feature depending on who you ask, I'm leaving it like that for now.
