@@ -374,6 +374,12 @@ setup before we add it to *jobs*."
     (sb-ext:process-kill (process p) sb-unix:sigterm))
   (sb-ext:process-wait (process p))
   (sb-ext:process-close (process p))
+  ;; SB-EXT:PROCESS-CLOSE may leave a closed stream.  Other part of
+  ;; our code is not expecting this: `process-input'/`process-output'
+  ;; shall either be open stream or nil, therefore we make sure to
+  ;; set them to nil.
+  (setf (process-input p) nil
+        (process-output p) nil)
   t)
 
 ;;;; Pipeline
