@@ -363,11 +363,24 @@ setup before we add it to *jobs*."
 (defmethod process-status ((p simple-process))
   (sb-ext:process-status (process p)))
 
+(defun close-input-maybe (p)
+  "Close input pipe, because there's nothing we can do about it."
+  (when (member (process-status p) '(:exited :signaled))
+    (when (process-input p)
+      (close (process-input p))
+      (setf (process-input p) nil))))
+
 (defmethod initialize-instance :after ((p simple-process) &key)
   (setf (sb-ext:process-status-hook (process p))
         (lambda (proc)
           (declare (ignore proc))
-          (nhooks:run-hook (status-change-hook p)))))
+          (nhooks:run-hook (status-change-hook p))))
+  (nhooks:add-hook
+      (status-change-hook p)
+      (make-instance 'nhooks:handler
+                     :fn (lambda () (close-input-maybe p))
+                     :name 'close-input))
+  (close-input-maybe p))
 
 (defmethod close ((p simple-process) &key abort)
   (when abort
@@ -586,7 +599,11 @@ types of objects."))
           (when read-stream
             (rotatef (process-output p) read-stream))
           (when write-stream
-            (rotatef (process-input p) write-stream)))
+            (rotatef (process-input p) write-stream)
+            ;; Try to deal with race conditon, when the process exited
+            ;; before we restore process-input so that the close-input
+            ;; status-change-hook does not run
+            (close-input-maybe p)))
       (background () :report "Run job in background.")
       (abort () :report "Abort job."
         (close p :abort t))))
