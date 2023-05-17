@@ -8,13 +8,14 @@ Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinc
   - [[#command-and-process-mapping][Command and Process Mapping]]
   - [[#environment][Environment]]
   - [[#scripting-blazingly-fast-start-up][Scripting (blazingly fast start up)]]
+  - [[#unix-in-slime][Unix in SLIME]]
 
 * Quick Start
-Currently, only SBCL is tested. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazyseq]] into =~/quicklisp/local-projects/=.
+Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazyseq]] into =~/quicklisp/local-projects/=.
 
-It's recommended to load ~unix-in-slime.el~ for better Slime integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~, then ~M-x unix-in-slime~ to start a new REPL.
+It's recommended to load ~unix-in-slime.el~ for better SLIME integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~, then ~M-x unix-in-slime~ to start a new REPL.
 
-~unix-in-slime~ installs hacks to the host Lisp environment by calling ~(unix-in-lisp:install)~ on startup. To undo hacks done to the host environment (currently mostly the reader and printer, for the Unix style slash syntax) and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
+~unix-in-slime~ installs hacks to the host Lisp environment by calling ~(unix-in-lisp:install)~ on startup. To undo hacks done to the host environment and unmount Unix FS packages, run ~(unix-in-lisp:uninstall)~.
 
 ** Examples
 (Some print-outs are omitted)
@@ -159,3 +160,9 @@ The benefit of the above approach is that it is blazingly fast when started from
 2. Use ~asdf:require-system~. This avoids scanning the ASDF registry directory tree for modification, which wastes significant time!
 
 On my machine, a hello world using the above approach run in 0.5ms, while Python 3 uses 30ms!
+** Unix in SLIME
+The above documentations have been assuming you are using the ~unix-in-slime~ listener. Here we document some additional aspects of ~unix-in-slime~.
+
+Unix in Lisp assumes a dedicated swank server for ~unix-in-slime~ listeners (and potentially other front-ends in the future). ~M-x unix-in-slime~ will start one on ~unix-in-slime-default-port~ (4010 by default) if none already exists in the Unix in Lisp image. The server handles multiple connections, so you can safely start multiple ~unix-in-slime~ listeners simultaneously, like how you must have lived with multiple terminal windows.
+*** Completion
+If you have configured completion for SLIME itself, completion works out of the box for ~unix-in-slime~. Note that we automagically get "filename completion", because they are mapped as symbols, and we have symbol completion at home! Currently there's one quirk: filenames are always completed to their full resolved absolute path, because that's what corresponds to symbols. I'd say it's either a bug or a feature depending on who you ask, I'm leaving it like that for now.
