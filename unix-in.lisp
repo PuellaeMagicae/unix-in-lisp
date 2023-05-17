@@ -492,6 +492,9 @@ and will be closed after child process creation.")
       ;; The consumer takes the output stream exclusively
       (setf (process-output p) nil)))
   (:method ((s sb-sys:fd-stream)) s)
+  (:method ((s string))
+    "Don't turn a STRING into lines of single characters."
+    (read-fd-stream (list s)))
   (:method ((p sequence))
     (native-lazy-seq:with-iterators (element next endp) p
       (bind (((:values read-fd write-fd) (osicat-posix:pipe))
@@ -576,15 +579,12 @@ types of objects."))
                             (close write-stream)
                             (return)))
                         (force-output write-stream)))
-                     ((process-output p)
+                     (read-stream
                       ;; wait for output to finish reading
                       (loop (sleep 0.1)))
                      (t (return-from repl-connect nil))))
           (when read-stream
-               (iolib:remove-fd-handlers
-                *fd-watcher-event-base*
-                (sb-sys:fd-stream-fd read-stream))
-               (rotatef (process-output p) read-stream))
+            (rotatef (process-output p) read-stream))
           (when write-stream
             (rotatef (process-input p) write-stream)))
       (background () :report "Run job in background.")
