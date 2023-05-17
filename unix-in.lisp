@@ -697,8 +697,8 @@ treatment if possible."
 
 (defgeneric to-argument (object)
   (:documentation "Convert Lisp OBJECT to Unix command argument.")
+  (:method (object) (princ-to-string object))
   (:method ((symbol symbol))  (prin1-to-string symbol))
-  (:method ((string string)) string)
   (:method ((list list))
     "Elements of LIST are concatenated together.
 This implies: 1. if a command output a single line, its result can be
