@@ -335,10 +335,10 @@ setup before we add it to *jobs*."
    (status-change-hook p)
    (make-instance 'nhooks:handler
                   :fn (lambda ()
-                        (unless (eq (process-status p) :running)
+                        (unless (member (process-status p) '(:running :stopped))
                           (deletef *jobs* p)))
                   :name 'remove-from-jobs))
-  (when (eq (process-status p) :running)
+  (when (member (process-status p) '(:running :stopped))
     (push p *jobs*)))
 
 ;;;; Simple process
