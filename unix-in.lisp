@@ -375,12 +375,19 @@ setup before we add it to *jobs*."
         (lambda (proc)
           (declare (ignore proc))
           (nhooks:run-hook (status-change-hook p))))
-  (nhooks:add-hook
-      (status-change-hook p)
-      (make-instance 'nhooks:handler
-                     :fn (lambda () (close-input-maybe p))
-                     :name 'close-input))
-  (close-input-maybe p))
+  ;; Grab input stream so that we can always close it,
+  ;; even if other things set it to nil
+  (when-let (input-stream (process-input p))
+    (flet ((close-input-maybe ()
+             (when (member (process-status p) '(:exited :signaled))
+               (close input-stream)
+               (setf (process-input p) nil))))
+      (nhooks:add-hook
+          (status-change-hook p)
+          (make-instance 'nhooks:handler
+                         :fn #'close-input-maybe
+                         :name 'close-input))
+      (close-input-maybe))))
 
 (defmethod close ((p simple-process) &key abort)
   (when abort
@@ -599,11 +606,7 @@ types of objects."))
           (when read-stream
             (rotatef (process-output p) read-stream))
           (when write-stream
-            (rotatef (process-input p) write-stream)
-            ;; Try to deal with race conditon, when the process exited
-            ;; before we restore process-input so that the close-input
-            ;; status-change-hook does not run
-            (close-input-maybe p)))
+            (rotatef (process-input p) write-stream)))
       (background () :report "Run job in background.")
       (abort () :report "Abort job."
         (close p :abort t))))
