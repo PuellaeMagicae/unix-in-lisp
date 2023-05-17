@@ -2,7 +2,7 @@
   (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
-                #:concat #:string-prefix-p)
+                #:concat #:string-prefix-p #:synchronized)
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
                 #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
@@ -296,7 +296,8 @@ mechanisms."
 ;;; Effective Process
 
 ;;;; Abstract interactive process
-(defclass process-mixin (native-lazy-seq:lazy-seq)
+(defclass process-mixin
+    (native-lazy-seq:lazy-seq synchronized)
   ((status-change-hook
     :reader status-change-hook
     :initform (make-instance 'nhooks:hook-void))))
@@ -363,12 +364,10 @@ setup before we add it to *jobs*."
 (defmethod process-status ((p simple-process))
   (sb-ext:process-status (process p)))
 
-(defun close-input-maybe (p)
-  "Close input pipe, because there's nothing we can do about it."
-  (when (member (process-status p) '(:exited :signaled))
-    (when (process-input p)
-      (close (process-input p))
-      (setf (process-input p) nil))))
+(defvar *input-process-table* (make-hash-table :weakness :key)
+  "Map input streams to simple-processes.
+Used for removing close-input handler before closing input stream
+to avoid race condition.")
 
 (defmethod initialize-instance :after ((p simple-process) &key)
   (setf (sb-ext:process-status-hook (process p))
@@ -378,6 +377,7 @@ setup before we add it to *jobs*."
   ;; Grab input stream so that we can always close it,
   ;; even if other things set it to nil
   (when-let (input-stream (process-input p))
+    (setf (gethash input-stream *input-process-table*) p)
     (flet ((close-input-maybe ()
              (when (member (process-status p) '(:exited :signaled))
                (close input-stream)
@@ -577,21 +577,22 @@ types of objects."))
         ;; We take input/output of the process exclusively
         ;; TODO: proper mutex
         read-stream write-stream)
-    (when (process-output p)
-      (rotatef read-stream (process-output p))
-      (copy-fd-to-stream
-       read-stream
-       *standard-output*
-       (lambda ()
-         (bt:interrupt-thread
-          repl-thread
-          (lambda ()
-            (ignore-errors (throw 'finish nil)))))))
     (restart-case
         (unwind-protect
              (catch 'finish
-               (cond ((process-input p)
-                      (rotatef write-stream (process-input p))
+               (synchronized (p)
+                 (rotatef read-stream (process-output p))
+                 (rotatef write-stream (process-input p)))
+               (when read-stream
+                 (copy-fd-to-stream
+                  read-stream
+                  *standard-output*
+                  (lambda ()
+                    (bt:interrupt-thread
+                     repl-thread
+                     (lambda ()
+                       (ignore-errors (throw 'finish nil)))))))
+               (cond (write-stream
                       (loop
                         (handler-case
                             (write-char (read-char) write-stream)
@@ -603,9 +604,8 @@ types of objects."))
                       ;; wait for output to finish reading
                       (loop (sleep 0.1)))
                      (t (return-from repl-connect nil))))
-          (when read-stream
-            (rotatef (process-output p) read-stream))
-          (when write-stream
+          (synchronized (p)
+            (rotatef (process-output p) read-stream)
             (rotatef (process-input p) write-stream)))
       (background () :report "Run job in background.")
       (abort () :report "Abort job."
@@ -728,30 +728,35 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
         (path (ensure-path command))
         (args (map 'list #'to-argument args))
         input-1 output-1 error-1)
-    (or (nhooks:run-hook *fast-load-functions* path args
-                         :input input :output output :error error
-                         :directory directory)
-        (unwind-protect
-             (progn
-               (psetq input-1 (read-fd-stream input)
-                      output-1 (write-fd-stream output)
-                      error-1 (write-fd-stream error))
-               (make-instance
-                'simple-process
-                :process
-                (sb-ext:run-program
-                 path args
-                 :wait nil
-                 :input input-1 :output output-1 :error error-1
-                 :directory directory
-                 :environment (current-env))
-                :description (princ-to-string command)))
-          (when (streamp input-1)
-            (close input-1))
-          (when (streamp output-1)
-            (close output-1))
-          (when (streamp error-1)
-            (close error-1))))))
+    (flet ((close-maybe (s)
+             (when (streamp s)
+               (when-let (p (gethash s *input-process-table*))
+                 (nhooks:remove-hook (status-change-hook p) 'close-input))
+               ;; Now that the signal handler is gone, we have
+               ;; exclusive access to S's state.
+               (when (open-stream-p s)
+                 (close s)))))
+      (or (nhooks:run-hook *fast-load-functions* path args
+                           :input input :output output :error error
+                           :directory directory)
+          (unwind-protect
+               (progn
+                 (psetq input-1 (read-fd-stream input)
+                        output-1 (write-fd-stream output)
+                        error-1 (write-fd-stream error))
+                 (make-instance
+                  'simple-process
+                  :process
+                  (sb-ext:run-program
+                   path args
+                   :wait nil
+                   :input input-1 :output output-1 :error error-1
+                   :directory directory
+                   :environment (current-env))
+                  :description (princ-to-string command)))
+            (close-maybe input-1)
+            (close-maybe output-1)
+            (close-maybe error-1))))))
 
 (defun command-macro (form env)
   (declare (ignore env)
