@@ -551,10 +551,11 @@ types of objects."))
 (defmethod repl-connect ((p process-mixin))
   "Connect `*standard-input*' and `*standard-output*' to P's input/output."
   (let ((repl-thread (bt:current-thread))
-        read-stream)
+        ;; We take input/output of the process exclusively
+        ;; TODO: proper mutex
+        read-stream write-stream)
     (when (process-output p)
-      (setf read-stream (process-output p)
-            (process-output p) nil)
+      (rotatef read-stream (process-output p))
       (copy-fd-to-stream
        read-stream
        *standard-output*
@@ -564,25 +565,29 @@ types of objects."))
           (lambda ()
             (ignore-errors (throw 'finish nil)))))))
     (restart-case
-        (catch 'finish
-          (cond ((process-input p)
-                 (loop
-                   (handler-case
-                       (write-char (read-char) (process-input p))
-                     (end-of-file ()
-                       (close (process-input p))
-                       (return)))
-                   (force-output (process-input p))))
-                ((process-output p)
-                 ;; wait for output to finish reading
-                 (loop (sleep 0.1)))
-                (t (process-wait p))))
-      (background () :report "Run job in background."
-        (when read-stream
-          (iolib:remove-fd-handlers
-           *fd-watcher-event-base*
-           (sb-sys:fd-stream-fd read-stream))
-          (setf (process-output p) read-stream)))
+        (unwind-protect
+             (catch 'finish
+               (cond ((process-input p)
+                      (rotatef write-stream (process-input p))
+                      (loop
+                        (handler-case
+                            (write-char (read-char) write-stream)
+                          (end-of-file ()
+                            (close write-stream)
+                            (return)))
+                        (force-output write-stream)))
+                     ((process-output p)
+                      ;; wait for output to finish reading
+                      (loop (sleep 0.1)))
+                     (t (process-wait p))))
+          (when read-stream
+               (iolib:remove-fd-handlers
+                *fd-watcher-event-base*
+                (sb-sys:fd-stream-fd read-stream))
+               (rotatef (process-output p) read-stream))
+          (when write-stream
+            (rotatef (process-input p) write-stream)))
+      (background () :report "Run job in background.")
       (abort () :report "Abort job."
         (close p :abort t))))
   t)
