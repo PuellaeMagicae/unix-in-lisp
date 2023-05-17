@@ -841,29 +841,37 @@ Currently, this is intended to be used for *both* /path syntax and
 
 ;;; Environment variables
 
-(defvar *env-vars* nil)
+(defvar *env-vars* nil "An ALIST that maps symbols to Unix environment variable name strings.")
 
-(defun ensure-env-var (symbol &optional env)
+(defun ensure-env-var (symbol &optional unix-name)
+  "Associate SYMBOL with Unix environment variable with UNIX-NAME.
+If UNIX-NAME is nil or not provided, the SYMBOL must follow $FOO naming
+convention and UNIX-NAME defaults to FOO."
   (unless (string-prefix-p "$" (symbol-name symbol))
     (warn "~S is being defined as a Unix environment variable, but its name does
 not follow usual convention (like $~A)." symbol (symbol-name symbol)))
-  (unless env
+  (unless unix-name
     (if (string-prefix-p "$" (symbol-name symbol))
-        (setq env (subseq (symbol-name symbol) 1))
+        (setq unix-name (subseq (symbol-name symbol) 1))
         (error "Please supply a Unix environment variable name for ~S, or use a symbol
 that follow usual naming convention (like $~A)." symbol (symbol-name symbol))))
   (proclaim `(special ,symbol))
   (unless (boundp 'symbol)
-    (setf (symbol-value symbol) (or (uiop:getenv env) "")))
-  (setf (assoc-value *env-vars* symbol) env)
+    (setf (symbol-value symbol) (or (uiop:getenv unix-name) "")))
+  (setf (assoc-value *env-vars* symbol) unix-name)
   symbol)
 
 (defun current-env ()
+  "Construct Unix environment according to Lisp symbol bindings.
+The result is a list of strings with the form \"VAR=VALUE\", as in
+environ(7)."
   (iter (for (symbol . name) in *env-vars*)
     (when (boundp symbol)
       (collect (concat name "=" (princ-to-string (symbol-value symbol)))))))
 
 (defun synchronize-env-to-unix ()
+  "Update the Unix environment of the Lisp image to reflect current Lisp
+symbol bindings."
   (iter (for (symbol . name) in *env-vars*)
     (if (boundp symbol)
         (setf (uiop:getenv name) (princ-to-string (symbol-value symbol)))
