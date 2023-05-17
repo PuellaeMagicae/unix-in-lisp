@@ -33,13 +33,22 @@
 (require 'nadvice)
 (require 'slime)
 
+(defgroup unix-in-slime nil
+  "SLIME frontend for Unix in Lisp"
+  :group 'applications)
+
+(defcustom unix-in-slime-default-port 4010
+  "Default port to start up Unix in SLIME server."
+  :type 'integer
+  :group 'unix-in-slime)
+
+(defvar unix-in-slime-port nil)
+
 (define-advice slime-repl-emit
     (:after (string) unix-in-slime)
   (with-current-buffer (slime-output-buffer)
     (comint-carriage-motion slime-output-start slime-output-end)
     (ansi-color-apply-on-region slime-output-start slime-output-end)))
-
-(defvar unix-in-slime-port nil)
 
 ;;;###autoload
 (defun unix-in-slime ()
@@ -52,7 +61,7 @@
             (cl:funcall (cl:find-symbol "INSTALL" "UNIX-IN-LISP") t)
             (cl:or (cl:symbol-value (cl:find-symbol "*SWANK-PORT*" "UNIX-IN-LISP"))
                    (cl:set (cl:find-symbol "*SWANK-PORT*" "UNIX-IN-LISP")
-                           (swank:create-server :dont-close t))))
+                           (swank:create-server :port ,unix-in-slime-default-port :dont-close t))))
         (lambda (port)
           (setq unix-in-slime-port port)
           ;; don't let `slime-connect' change default connection
