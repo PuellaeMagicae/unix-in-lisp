@@ -296,7 +296,7 @@ mechanisms."
 ;;; Effective Process
 
 ;;;; Abstract interactive process
-(defclass process-mixin (native-lazyseq:lazy-seq)
+(defclass process-mixin (native-lazy-seq:lazy-seq)
   ((status-change-hook
     :reader status-change-hook
     :initform (make-instance 'nhooks:hook-void))))
@@ -314,7 +314,7 @@ mechanisms."
     (format stream "~A (~A)" (description p) (process-status p))))
 
 (defmethod shared-initialize ((p process-mixin) slot-names &key)
-  (setf (native-lazyseq:generator p)
+  (setf (native-lazy-seq:generator p)
         (lambda ()
           (when (and (process-output p)
                      (open-stream-p (process-output p)))
@@ -487,7 +487,7 @@ and will be closed after child process creation.")
       (setf (process-output p) nil)))
   (:method ((s sb-sys:fd-stream)) s)
   (:method ((p sequence))
-    (native-lazyseq:with-iterators (element next endp) p
+    (native-lazy-seq:with-iterators (element next endp) p
       (bind (((:values read-fd write-fd) (osicat-posix:pipe))
              ((:labels clean-up ())
               (iolib:remove-fd-handlers *fd-watcher-event-base* write-fd)
@@ -581,9 +581,9 @@ types of objects."))
         (close p :abort t))))
   t)
 
-(defmethod repl-connect ((s native-lazyseq:lazy-seq))
+(defmethod repl-connect ((s native-lazy-seq:lazy-seq))
   "Force evaluation of S and print each elements."
-  (native-lazyseq:with-iterators (element next endp) s
+  (native-lazy-seq:with-iterators (element next endp) s
     (iter (until (funcall endp))
       (format t "~A~%" (funcall element))
       (force-output)

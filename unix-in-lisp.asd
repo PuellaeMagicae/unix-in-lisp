@@ -6,7 +6,7 @@
                :named-readtables
                :cl-advice
                :nhooks
-               :native-lazyseq
+               :native-lazy-seq
                :iolib
                :iolib/os)
   :components ((:file "unix-in")
