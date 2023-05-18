@@ -114,6 +114,14 @@ The result is guaranteed to be a file path (without trailing slashes)."
           (error 'wrong-file-kind :pathname path :wanted-kind kinds :actual-kind kind)
           (error 'file-does-not-exist :pathname path)))))
 
+(defvar *stat-cache* (make-hash-table :weakness :key)
+  "Map Unix FS packages (maybe in the future, also file symbols) to
+the current idea Unix in Lisp have about their status (currently
+`isys:stat' structures).
+
+Used for checking mtime and skip remounting if it didn't change since
+last mount.")
+
 (defun mount-directory (path)
   "Mount PATH as a Unix FS package, which must be a directory.
 Return the mounted package."
@@ -125,7 +133,14 @@ Return the mounted package."
       (ensure-directories-exist (to-dir path))))
   (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
-                      (uiop:ensure-package package-name :use '("UNIX-IN-LISP.COMMON")))))
+                      (uiop:ensure-package package-name :use '("UNIX-IN-LISP.COMMON"))))
+         (stat (isys:stat path)))
+    ;; If mtime haven't changed, skip remounting.
+    (when-let (old-stat (gethash package *stat-cache*))
+      (when (= (isys:stat-mtime old-stat)
+               (isys:stat-mtime stat))
+        (return-from mount-directory package)))
+    (setf (gethash package *stat-cache*) stat)
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
