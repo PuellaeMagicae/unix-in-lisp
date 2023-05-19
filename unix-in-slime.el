@@ -56,7 +56,7 @@
   (interactive)
   (if (slime-connected-p)
       (slime-eval-async
-          '(cl:progn
+          `(cl:progn
             (asdf:require-system "unix-in-lisp")
             (cl:funcall (cl:find-symbol "ENSURE-SWANK-SERVER" "UNIX-IN-LISP")
                         ,unix-in-slime-default-port))
@@ -66,7 +66,7 @@
           (let ((slime-default-connection slime-default-connection))
             (slime-connect "localhost" port)
             (slime-eval-async
-                '(cl:funcall (cl:find-symbol "SETUP" "UNIX-IN-LISP"))))))
+                `(cl:funcall (cl:find-symbol "SETUP" "UNIX-IN-LISP"))))))
     (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
 (defun unix-in-slime-p ()
