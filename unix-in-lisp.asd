@@ -1,6 +1,7 @@
 (asdf:defsystem unix-in-lisp
   :depends-on (:osicat
                :metabang-bind
+               :pathname-utils
                :ppath
                :fare-quasiquote-extras
                :named-readtables

@@ -16,9 +16,8 @@
 
 ;;;; package system mounting
 
-(-> canonical-symbol (symbol) symbol)
 (-> mount-file (t) symbol)
-(-> ensure-path (t) string)
+(-> ensure-path (t &optional boolean) pathname)
 (-> mount-directory (t) package)
 (-> ensure-homed-symbol (string package) symbol)
 
@@ -47,52 +46,44 @@ for `package-name's and `symbol-name's."
   symbol)
 
 (defun package-path (package)
-  "Returns the namestring of the directory mounted to PACKAGE,
+  "Returns the pathname of the directory mounted to PACKAGE,
 or NIL if PACKAGE is not a UNIX FS package."
-  (let ((filename (unconvert-case (package-name package))))
-    (when (ppath:isabs filename) filename)))
+  (uiop:absolute-pathname-p
+   (uiop:parse-native-namestring
+    (unconvert-case (package-name package)))))
 
-(defun symbol-path (symbol)
-  "Returns the namestring of the file mounted to SYMBOL,
-Signals an error if the home package SYMBOL is not a Unix FS package.
-
-Note that SYMBOL must be the canonical mounted symbol, to retrieve the
-path designated by any symbol, consider using `ensure-path'."
-  (if-let (dir (package-path (symbol-package symbol)))
-    (ppath:join dir (unconvert-case (symbol-name symbol)))
-    (error "Home package ~S of ~S is not a Unix FS package."
-           (symbol-package symbol) symbol)))
-
-(defun canonical-symbol (symbol)
-  "Returns the symbol mounted to the path designated by SYMBOL.
-This mounts the symbol in the process and may also mount required Unix
-FS packages."
-  (if-let (path (ignore-errors (ensure-path symbol)))
-    (mount-file path)
-    symbol))
+(defun symbol-path (symbol &optional relative)
+  "Returns the pathname of the file mounted to SYMBOL,
+Signals an error if the home package SYMBOL is not a Unix FS package."
+  (uiop:merge-pathnames*
+   (uiop:parse-native-namestring (unconvert-case (symbol-name symbol)))
+   (if-let (package-path (package-path (symbol-package symbol)))
+     (pathname-utils:force-directory package-path)
+     (if relative
+         *default-pathname-defaults*
+         (error "Home package ~S of ~S is not a Unix FS package."
+                (symbol-package symbol) symbol)))))
 
 (defun symbol-home-p (symbol) (eq *package* (symbol-package symbol)))
 
-(defun ensure-path (path)
-  "Return the path (a string) designated by PATH.
-The result is guaranteed to be a file path (without trailing slashes)."
-  (cond ((pathnamep path)
-         (setq path (uiop:native-namestring path)))
-        ((symbolp path)
-         (setq path
-               (cond ((or (ppath:isabs (symbol-name path))
-                          (string-prefix-p "~" (symbol-name path)))
-                      (unconvert-case (symbol-name path)))
-                     ((package-path (symbol-package path))
-                      (ppath:join (package-path (symbol-package path))
-                                  (unconvert-case (symbol-name path))))
-                     (t (unconvert-case (symbol-name path)))))))
-  (let ((path (ppath:expanduser (ppath:normpath path))))
-    (unless (ppath:isabs path)
-      (error "~S is not an absolute path." path))
-    path))
+(defun ensure-path (path &optional relative)
+  "Return the pathname designated by PATH."
+  (when (symbolp path)
+    (setq path (symbol-path path relative)))
+  (when (pathnamep path)
+    (setq path (uiop:native-namestring path)))
+  (setq path (ppath:expanduser path))
+  (setq path (uiop:parse-unix-namestring path))
+  (unless (uiop:absolute-pathname-p path)
+    (if relative
+        (setq path (uiop:merge-pathnames* path))
+        (error "~S is not an absolute path." path)))
+  path)
 
-(defun to-dir (filename) (ppath:join filename ""))
+(defun force-file (path)
+  (setq path (uiop:native-namestring path))
+  (setq path (string-right-trim "/" path))
+  (setq path (uiop:parse-unix-namestring path)))
 
 (define-condition wrong-file-kind (simple-error file-error)
   ((wanted-kind :initarg :wanted-kind) (actual-kind :initarg :actual-kind))
@@ -126,15 +117,17 @@ last mount.")
   "Mount PATH as a Unix FS package, which must be a directory.
 Return the mounted package."
   (setq path (ensure-path path))
+  (assert (uiop:directory-pathname-p path))
   (restart-case
       (assert-file-kind path :directory)
     (create-directory ()
       :test (lambda (c) (typep c 'file-does-not-exist))
-      (ensure-directories-exist (to-dir path))))
-  (bind ((package-name (convert-case path))
+      (ensure-directories-exist path)))
+  (bind ((namestring (uiop:native-namestring path))
+         (package-name (convert-case namestring))
          (package (or (find-package package-name)
-                      (uiop:ensure-package package-name :use '("UNIX-IN-LISP.COMMON"))))
-         (stat (isys:stat path)))
+                      (uiop:ensure-package package-name)))
+         (stat (isys:stat namestring)))
     ;; If mtime haven't changed, skip remounting.
     (when-let (old-stat (gethash package *stat-cache*))
       (when (= (isys:stat-mtime old-stat)
@@ -144,11 +137,11 @@ Return the mounted package."
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
-            (when (not (ppath:lexists (symbol-path symbol)))
+            (when (not (uiop:probe-file* (symbol-path symbol)))
               (unintern symbol package)))
           (package-exports package))
     (mapc #'mount-file (uiop:directory*
-                        (merge-pathnames uiop:*wild-file-for-directory* (to-dir path))))
+                        (uiop:merge-pathnames* uiop:*wild-file-for-directory* path)))
     package))
 
 (defun ensure-homed-symbol (symbol-name package)
@@ -166,24 +159,21 @@ Return the symbol."
                       (intern symbol-name package))
                  (mapc (lambda (p) (use-package p package)) use-list)))))))
 
-(defun mount-file (filename)
-  "Mount FILENAME as a symbol in the appropriate Unix FS package."
-  (setq filename (ensure-path filename))
-  (unless (ppath:lexists filename)
-    (error 'file-does-not-exist :pathname filename))
-  (bind (((directory . file) (ppath:split filename))
-         (package (or (find-package (convert-case directory)) (mount-directory directory)))
-         (symbol (ensure-homed-symbol (convert-case file) package)))
-    (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
-    (export symbol (symbol-package symbol))
-    (when (uiop:file-exists-p filename)
-      (ensure-executable symbol))
-    symbol))
+(defun mount-file (path)
+  "Mount PATH as a symbol in the appropriate Unix FS package."
+  (setq path (force-file (ensure-path path)))
+  (bind ((directory (uiop:native-namestring (ensure-path (pathname-utils:to-directory path))))
+         (file (uiop:native-namestring (pathname-utils:to-file path)))
+         (package (or (find-package (convert-case directory)) (mount-directory directory))))
+    (let ((symbol (ensure-homed-symbol (convert-case file) package)))
+      (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
+      (export symbol (symbol-package symbol))
+      (ensure-executable symbol)
+      symbol)))
 
 ;; TODO: something more clever, maybe `fswatch'
 (defun remount-current-directory ()
-  (when-let (pathname (package-path *package*))
-    (mount-directory pathname)))
+  (mount-directory *default-pathname-defaults*))
 
 (nhooks:add-hook *post-command-hook* 'remount-current-directory)
 
@@ -191,7 +181,7 @@ Return the symbol."
 
 (defun access-file (path)
   (if (uiop:directory-exists-p path)
-      (mount-directory path)
+      (mount-directory (pathname-utils:force-directory path))
       (uiop:read-file-lines path)))
 
 (defun (setf access-file) (new-value path)
@@ -225,7 +215,7 @@ Code should then use the returned symbol in place of SYMBOL."
                (reckless-continue () :report "Unintern the symbol and retry."
                  (ensure-symbol-macro (reintern-symbol symbol) form)))))))
 
-(defmacro defile (symbol &optional initform)
+#+nil (defmacro defile (symbol &optional initform)
   (setq symbol (canonical-symbol symbol))
   (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
   `(progn
@@ -636,46 +626,6 @@ types of objects."))
       (funcall next)))
   t)
 
-(defun compute-lexifications (body)
-  "Return an ALIST that map symbols to their canonical symbols.
-This scans BODY to discover any symbol that correspond to Unix file,
-but is not canonical.
-
-The returned alist is intended for establishing MACROLET and
-SYMBOL-MACROLET bindings to redirect accesses to the canonical symbol,
-inspired by the Common Lisp implementation of locale/lexical
-environment (Gat, E. Locales: First-Class Lexical Environments for
-Common Lisp)."
-  (let ((map (make-hash-table)))
-    (serapeum:walk-tree
-     (lambda (form)
-       (when (symbolp form)
-         (ignore-some-conditions (file-error)
-           (setf (gethash form map) (canonical-symbol form)))))
-     body)
-    (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
-               (alexandria:hash-table-alist map))))
-
-(defmacro toplevel (&body body)
-  "Evaluate BODY, but with ergonomics improvements for using as a shell.
-1. Use `compute-lexifications' to support relative symbol accesses.
-2. Use `repl-connect' to give returned primary value special
-treatment if possible."
-  (let ((lex (compute-lexifications body)))
-    `(let ((result
-             (multiple-value-list
-              (symbol-macrolet
-                  ,(iter (for (from . to) in lex)
-                     (collect `(,from ,to)))
-                (macrolet
-                    ,(iter (for (from . to) in lex)
-                       (collect `(,from (&rest args) `(,',to ,@args))))
-                  ,@body)))))
-       (when (repl-connect (car result))
-         (pop result))
-       (multiple-value-prog1 (values-list result)
-         (nhooks:run-hook *post-command-hook*)))))
-
 ;;; Fast loading command
 
 (defvar *fast-load-functions*
@@ -685,8 +635,8 @@ treatment if possible."
   (and (eq (read-char stream nil 'eof) #\#)
        (eq (read-char stream nil 'eof) #\!)))
 
-(defun fast-load-sbcl-shebang (filename args &key input output error directory)
-  (let ((stream (open filename :external-format :latin-1)))
+(defun fast-load-sbcl-shebang (path args &key input output error directory)
+  (let ((stream (open path :external-format :latin-1)))
     (if (ignore-errors
          (and (read-shebang stream)
               (string= (read-line stream) "/usr/bin/env sbcl --script")))
@@ -697,10 +647,10 @@ treatment if possible."
                               (uiop:with-current-directory (directory)
                                 (with-standard-io-syntax
                                   (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
-                                        (sb-ext:*posix-argv* (cons filename args)))
+                                        (sb-ext:*posix-argv* (cons (uiop:native-namestring path) args)))
                                     (load stream))))
                            (close stream)))
-                       :description (cdr (ppath:split filename))
+                       :description (uiop:native-namestring (pathname-utils:to-file path))
                        :input input :output output :error error)
         (progn
           (close stream)
@@ -739,8 +689,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
     (finally (return (values plist rest)))))
 
 (defun execute-command (command args &key (input :stream) (output :stream) (error *standard-output*))
-  (let ((directory (uiop:absolute-pathname-p (to-dir (unconvert-case (package-name *package*)))))
-        (path (ensure-path command))
+  (let ((path (ensure-path command))
         (args (map 'list #'to-argument args))
         input-1 output-1 error-1)
     (flet ((close-maybe (s)
@@ -753,7 +702,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
                  (close s)))))
       (or (nhooks:run-hook *fast-load-functions* path args
                            :input input :output output :error error
-                           :directory directory)
+                           :directory *default-pathname-defaults*)
           (unwind-protect
                (progn
                  (psetq input-1 (read-fd-stream input)
@@ -766,7 +715,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
                    path args
                    :wait nil
                    :input input-1 :output output-1 :error error-1
-                   :directory directory
+                   :directory *default-pathname-defaults*
                    :environment (current-env))
                   :description (princ-to-string command)))
             (close-maybe input-1)
@@ -816,7 +765,12 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 ;;; Built-in commands
 
 (defmacro cd (&optional (path "~"))
-  `(setq *package* (mount-directory ,(list 'fare-quasiquote:quasiquote path))))
+  `(bind ((%path (pathname-utils:force-directory (ensure-path ,(list 'fare-quasiquote:quasiquote path) t)))
+          (package (mount-directory %path)))
+     (setq *default-pathname-defaults* %path)
+     (let ((use-list (remove-if #'package-path (package-use-list *package*))))
+       (uiop:ensure-package (package-name *package*) :mix (append use-list (list package))))
+     package))
 
 ;;; Reader syntax hacks
 
@@ -834,33 +788,30 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
            (unless (eq c 'eof) (unread-char c stream)))
          (standard-read ()
            (call-without-read-macro #\. (lambda () (read stream)))))
-    (if (package-path *package*)
-        (let ((char-1 (read-char stream nil 'eof))
-              (char-2 (read-char stream nil 'eof)))
-          (cond
-            ((delimiter-p char-1)
-             (unread char-1)
-             (intern "./"))
-            ((and (eq char-1 #\.) (delimiter-p char-2))
-             (unread char-2)
-             (intern "../"))
-            (t (unread char-2)
-               (unread char-1)
-               (unread char)
-               (standard-read))))
-        (progn (unread char)
-               (standard-read)))))
+    (let ((char-1 (read-char stream nil 'eof))
+          (char-2 (read-char stream nil 'eof)))
+      (cond
+        ((delimiter-p char-1)
+         (unread char-1)
+         (intern "./"))
+        ((and (eq char-1 #\.) (delimiter-p char-2))
+         (unread char-2)
+         (intern "../"))
+        (t (unread char-2)
+           (unread char-1)
+           (unread char)
+           (standard-read))))))
 
 (defun slash-read-macro (stream char)
-  "If we're reading a symbol that designates an *existing* Unix file,
-return its canonical symbol.  Otherwise return the original symbol.
+  "If we're reading a symbol whose name is an *existing* Unix filename,
+return the corresponding mounted symbol.  Otherwise return the original symbol.
 Currently, this is intended to be used for *both* /path syntax and
 ~user/path syntax."
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (if (symbol-home-p symbol)
         (handler-case
-            (canonical-symbol symbol)
+            (mount-file (symbol-name symbol))
           (file-error () symbol))
         symbol)))
 
@@ -869,7 +820,8 @@ Currently, this is intended to be used for *both* /path syntax and
 `UNIX-IN-LISP.COMMON' and call `ensure-env-var'."
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
-    (when (and (symbol-home-p symbol) (string-prefix-p "$" (symbol-name symbol)))
+    (when (and (symbol-home-p symbol)
+               (string-prefix-p "$" (symbol-name symbol)))
       (unintern symbol)
       (setq symbol (intern (symbol-name symbol) "UNIX-IN-LISP.COMMON"))
       (export symbol "UNIX-IN-LISP.COMMON")
@@ -889,6 +841,50 @@ Currently, this is intended to be used for *both* /path syntax and
       (let ((fare-quasiquote::*quasiquote-level* 1))
         (funcall orig thunk))
       (funcall orig thunk)))
+
+;;; Top-level lexification
+
+(defun compute-lexifications (body)
+  "Return an ALIST that map symbols that designates relative paths to the
+corresponding mounted symbols. This scans BODY to discover any symbol
+that correspond to Unix file, but is not canonical.
+
+The returned alist is intended for establishing MACROLET and
+SYMBOL-MACROLET bindings to redirect accesses to the mounted symbol,
+inspired by the Common Lisp implementation of locale/lexical
+environment (Gat, E. Locales: First-Class Lexical Environments for
+Common Lisp)."
+  (let ((map (make-hash-table)))
+    (serapeum:walk-tree
+     (lambda (form)
+       (when (and (symbolp form) (symbol-home-p form))
+         (ensure (gethash form map)
+           (or (ignore-some-conditions (file-error)
+                 (mount-file (ensure-path form t)))
+               form))))
+     body)
+    (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
+               (alexandria:hash-table-alist map))))
+
+(defmacro toplevel (&body body)
+  "Evaluate BODY, but with ergonomics improvements for using as a shell.
+1. Use `compute-lexifications' to support relative symbol accesses.
+2. Use `repl-connect' to give returned primary value special
+treatment if possible."
+  (let ((lex (compute-lexifications body)))
+    `(let ((result
+             (multiple-value-list
+              (symbol-macrolet
+                  ,(iter (for (from . to) in lex)
+                     (collect `(,from ,to)))
+                (macrolet
+                    ,(iter (for (from . to) in lex)
+                       (collect `(,from (&rest args) `(,',to ,@args))))
+                  ,@body)))))
+       (when (repl-connect (car result))
+         (pop result))
+       (multiple-value-prog1 (values-list result)
+         (nhooks:run-hook *post-command-hook*)))))
 
 ;;; Environment variables
 
@@ -961,12 +957,9 @@ symbol bindings."
           (continue () :report "Uninstall first, then reinstall." (uninstall))
           (reckless-continue () :report "Install on top of it."))))
   (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
-    ;; Make UNIX-IN-LISP.COMMON first because FS packages in $PATH will
-    ;; circularly reference UNIX-IN-LISP.COMMON
-    (make-package "UNIX-IN-LISP.COMMON")
     (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
                       (handler-case
-                          (collect (mount-directory path))
+                          (collect (mount-directory (pathname-utils:force-directory path)))
                         (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
       (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
     (ensure-common-package "UNIX-IN-LISP.COMMON")
@@ -975,7 +968,7 @@ symbol bindings."
           (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
                 ((not (symbol-package symbol)) (call-next-method))
                 ((package-path (symbol-package symbol))
-                 (write-string (symbol-path symbol) stream))
+                 (write-string (uiop:native-namestring (symbol-path symbol)) stream))
                 (t (call-next-method)))
           (call-next-method)))
     (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
@@ -1003,5 +996,6 @@ symbol bindings."
 (defun setup ()
   (install t)
   (named-readtables:in-readtable unix-in-lisp)
-  (cd "~/")
+  (setq *package* (uiop:ensure-package "UNIX-USER" :use (list "UNIX-IN-LISP.COMMON")))
+  (cd)
   (values))

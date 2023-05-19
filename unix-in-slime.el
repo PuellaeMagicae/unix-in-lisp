@@ -70,7 +70,7 @@
     (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
 (defun unix-in-slime-p ()
-  (when (and unix-in-slime-port (slime-connection))
+  (when (and unix-in-slime-port (ignore-errors (slime-connection)))
     (equal (cadr (process-contact (slime-connection)))
            unix-in-slime-port)))
 
@@ -89,10 +89,13 @@
 
 (define-advice slime-repl-insert-prompt
     (:after () unix-in-slime)
-  (let ((prompt (slime-lisp-package-prompt-string)))
-    (when (file-name-absolute-p prompt)
-      (setq-local default-directory
-                  (substring (file-name-concat prompt "x") 0 -1)))))
+  (let ((dir (slime-eval '(uiop:native-namestring cl:*default-pathname-defaults*))))
+    (setq-local default-directory dir)))
+
+(defun unix-in-slime-filename-completion ()
+  (comint-filename-completion))
+
+(add-to-list 'slime-completion-at-point-functions 'unix-in-slime-filename-completion)
 
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here

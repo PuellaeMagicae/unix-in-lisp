@@ -1,8 +1,8 @@
 (in-package #:unix-in-lisp)
 
 (defun swank-untokenize-symbol-hook (orig package-name internal-p symbol-name)
-  (cond ((and (ppath:isabs package-name) (not internal-p))
-         (ppath:join package-name symbol-name))
+  (cond ((and (string-prefix-p "/" package-name) (not internal-p))
+         (concat package-name symbol-name))
         (t (funcall orig package-name internal-p symbol-name))))
 
 (defun swank-tokenize-symbol-convert (symbol-name package-name internal-p convert-case-p)
@@ -13,22 +13,18 @@
     (handler-case
         (cond ((and (not package-name)
                     (or (string-prefix-p "~" symbol-name)
-                        (ppath:isabs symbol-name)))
-               (bind (((dir . file)
-                       (ppath:split (ensure-path (unconvert-maybe symbol-name)))))
-                 (ignore-some-conditions (file-error)
-                   (mount-directory dir))
-                 (values (convert-maybe file) (convert-maybe dir) nil)))
-              ((and (not package-name) (package-path swank::*buffer-package*)
-                    (find #\/ symbol-name))
-               (bind (((dir . file)
-                       (ppath:split
-                        (ensure-path
-                         (ppath:join (package-path swank::*buffer-package*)
-                                     (unconvert-maybe symbol-name))))))
-                 (ignore-some-conditions (file-error)
-                   (mount-directory dir))
-                 (values (convert-maybe file) (convert-maybe dir) nil)))
+                        (string-prefix-p "/" symbol-name)
+                        (and (unix-in-slime-p)
+                             (find #\/ symbol-name))))
+               (bind ((path (uiop:parse-native-namestring (unconvert-maybe symbol-name)))
+                      (dir (ensure-path (pathname-utils:to-directory path) (unix-in-slime-p)))
+                      (file (pathname-utils:to-file path)))
+                 (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
+                   (ignore-some-conditions (file-error)
+                           (mount-directory dir)))
+                 (values (convert-maybe (uiop:native-namestring file))
+                         (convert-maybe (uiop:native-namestring dir))
+                         nil)))
               (t (values symbol-name package-name internal-p)))
       (error () (values symbol-name package-name internal-p)))))
 
@@ -64,6 +60,15 @@
               (finish-output)))))
       (funcall orig string)))
 
+(defun swank-track-package-hook (orig fun)
+  (if (unix-in-slime-p)
+      (unwind-protect (funcall fun)
+        (swank::send-to-emacs
+         (list :new-package (package-name *package*)
+               (concat (swank::package-string-for-prompt *package*) " "
+                       (uiop:native-namestring *default-pathname-defaults*)))))
+      (funcall orig fun)))
+
 (defun swank-add-connection-hook (orig conn)
   "Add Unix in SLIME connection to the last of `swank::*connections*',
 so that we never automatically become the default REPL."
@@ -81,48 +86,33 @@ thread-local/connection-local)."
     (funcall orig)))
 
 (defun slime-install (&optional skip-installed)
-  (cl-advice:add-advice :around #+swank 'swank::untokenize-symbol
-                                #+slynk 'slynk::untokenize-symbol
-                                'swank-untokenize-symbol-hook)
+  (cl-advice:add-advice :around 'swank::add-connection 'swank-add-connection-hook)
 
-  (cl-advice:add-advice :around #+swank 'swank::tokenize-symbol
-                                #+slynk 'slynk::tokenize-symbol
-                                'swank-tokenize-symbol-hook)
-  ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
-  ;; I feel like at least one of the two uses is subtlely wrong
-  (cl-advice:add-advice :around #+swank 'swank::tokenize-symbol-thoroughly
-                                #+slynk 'slynk::tokenize-symbol-thoroughly
-                                'swank-tokenize-symbol-thoroughly-hook)
+   (cl-advice:add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
+   (cl-advice:add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
+   ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
+   ;; I feel like at least one of the two uses is subtlely wrong
+  (cl-advice:add-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
 
-  (cl-advice:add-advice :around #+swank 'swank::add-connection
-                                'swank-add-connection-hook)
+  (cl-advice:add-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
+  (cl-advice:add-advice :around 'swank-repl::track-package 'swank-track-package-hook)
 
-  (cl-advice:add-advice :around #+swank 'swank-repl::eval-region
-                                'swank-eval-region-hook)
-  (cl-advice:add-advice :around #+swank 'swank-repl::globally-redirect-io-p
-                                'swank-globally-redirect-io-p-hook)
+  (cl-advice:add-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
 
-  (setq swank::*auto-abbreviate-dotted-packages* nil))
+  (setq swank::*auto-abbreviate-dotted-packages* nil)
+  (setq swank:*default-worker-thread-bindings* `((*readtable* . ,*readtable*))))
 
 (defun slime-uninstall ()
-  (cl-advice:remove-advice :around #+swank 'swank-repl::globally-redirect-io-p
-                                'swank-globally-redirect-io-p-hook)
-  (cl-advice:remove-advice :around #+swank 'swank-repl::eval-region
-                                   'swank-eval-region-hook)
+  (cl-advice:remove-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
 
-  (cl-advice:remove-advice :around #+swank 'swank::add-connection
-                                'swank-add-connection-hook)
+  (cl-advice:remove-advice :around 'swank-repl::track-package 'swank-track-package-hook)
+  (cl-advice:remove-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
 
-  (cl-advice:remove-advice :around #+swank 'swank::tokenize-symbol-thoroughly
-                                   #+slynk 'slynk::tokenize-symbol-thoroughly
-                                   'swank-tokenize-symbol-thoroughly-hook)
-  (cl-advice:remove-advice :around #+swank 'swank::tokenize-symbol
-                                   #+slynk 'slynk::tokenize-symbol
-                                   'swank-tokenize-symbol-hook)
+  (cl-advice:remove-advice :around 'swank::tokenize-symbol-thoroughly)
+  (cl-advice:remove-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
+  (cl-advice:remove-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
 
-  (cl-advice:remove-advice :around #+swank 'swank::untokenize-symbol
-                                   #+slynk 'slynk::untokenize-symbol
-                                   'swank-untokenize-symbol-hook))
+  (cl-advice:remove-advice :around 'swank::add-connection 'swank-add-connection-hook))
 (cl-advice:add-advice :after 'install 'slime-install)
 (cl-advice:add-advice :before 'uninstall 'slime-uninstall)
 
