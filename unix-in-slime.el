@@ -58,10 +58,8 @@
       (slime-eval-async
           '(cl:progn
             (asdf:require-system "unix-in-lisp")
-            (cl:funcall (cl:find-symbol "INSTALL" "UNIX-IN-LISP") t)
-            (cl:or (cl:symbol-value (cl:find-symbol "*SWANK-PORT*" "UNIX-IN-LISP"))
-                   (cl:set (cl:find-symbol "*SWANK-PORT*" "UNIX-IN-LISP")
-                           (swank:create-server :port ,unix-in-slime-default-port :dont-close t))))
+            (cl:funcall (cl:find-symbol "ENSURE-SWANK-SERVER" "UNIX-IN-LISP")
+                        ,unix-in-slime-default-port))
         (lambda (port)
           (setq unix-in-slime-port port)
           ;; don't let `slime-connect' change default connection

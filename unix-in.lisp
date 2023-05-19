@@ -2,7 +2,7 @@
   (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
-                #:concat #:string-prefix-p #:synchronized)
+                #:concat #:string-prefix-p #:synchronized #:ensure)
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
                 #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
@@ -283,9 +283,9 @@ mechanisms."
           (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
           (close read-stream)
           (funcall continuation))
-         (connection swank-api:*emacs-connection*)
+         (connection swank::*emacs-connection*)
          ((:labels read-data ())
-          (swank-api:with-connection (connection)
+          (swank::with-connection (connection)
             (handler-case
                 (iter (for c = (read-char-no-hang read-stream))
                   (while c)

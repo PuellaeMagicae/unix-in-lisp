@@ -125,3 +125,10 @@ thread-local/connection-local)."
                                    'swank-untokenize-symbol-hook))
 (cl-advice:add-advice :after 'install 'slime-install)
 (cl-advice:add-advice :before 'uninstall 'slime-uninstall)
+
+(defun ensure-swank-server (default-port)
+  "Make sure a swank server for Unix in SLIME is running.
+Return its port.  Start one on DEFAULT-PORT if none is running yet."
+  (install t)
+  (ensure *swank-port*
+    (swank:create-server :port default-port :dont-close t)))

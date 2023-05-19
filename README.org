@@ -18,7 +18,7 @@ Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinc
     - [[#completion][Completion]]
 
 * Quick Start
-Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazy-seq]] into =~/quicklisp/local-projects/=.
+Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazy-seq]] into =~/quicklisp/local-projects/=. Before first-time use, run ~(ql:quickload "unix-in-lisp")~ to ensure all dependencies are installed.
 
 It's recommended to load ~unix-in-slime.el~ for better SLIME integration. To load it, ~M-x load-file~ in Emacs then select ~unix-in-slime.el~, then ~M-x unix-in-slime~ to start a new REPL.
 
