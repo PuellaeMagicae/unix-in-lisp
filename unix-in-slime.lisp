@@ -40,7 +40,7 @@
 
 (defvar *swank-port* nil)
 
-(defun unix-in-slime-p (&optional (conn swank-api:*emacs-connection*))
+(defun unix-in-slime-p (&optional (conn swank::*emacs-connection*))
   (when (and conn *swank-port*)
     (bind ((s (swank::connection.socket conn))
            ((:values addr port)
