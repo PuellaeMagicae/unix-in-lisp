@@ -16,15 +16,12 @@
                         (string-prefix-p "/" symbol-name)
                         (and (unix-in-slime-p)
                              (find #\/ symbol-name))))
-               (bind ((path (uiop:parse-native-namestring (unconvert-maybe symbol-name)))
-                      (dir (ensure-path (pathname-utils:to-directory path) (unix-in-slime-p)))
-                      (file (pathname-utils:to-file path)))
+               (bind (((dir . file) (ppath:split (unconvert-maybe symbol-name))))
+                 (when (unix-in-slime-p)
+                   (setq dir (to-dir (ensure-path dir t))))
                  (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
-                   (ignore-some-conditions (file-error)
-                           (mount-directory dir)))
-                 (values (convert-maybe (uiop:native-namestring file))
-                         (convert-maybe (uiop:native-namestring dir))
-                         nil)))
+                   (ignore-errors (mount-directory dir)))
+                 (values (convert-maybe file) (convert-maybe dir) nil)))
               (t (values symbol-name package-name internal-p)))
       (error () (values symbol-name package-name internal-p)))))
 
@@ -33,6 +30,15 @@
 
 (defun swank-tokenize-symbol-thoroughly-hook (orig string)
   (multiple-value-call #'swank-tokenize-symbol-convert (funcall orig string) t))
+
+(defun swank-fuzzy-find-matching-symbols-hook (orig string package &rest args)
+  (if (and (eq package swank::*buffer-package*) (unix-in-slime-p))
+      (bind (((:values matchings time-limit)
+              (apply orig string (mount-directory *default-pathname-defaults*) args))
+             ((:values matchings-1 time-limit-1)
+              (apply orig string package :time-limit-in-msec time-limit args)))
+        (values (concatenate 'vector matchings matchings-1) time-limit-1))
+      (apply orig string package args)))
 
 (defvar *swank-port* nil)
 
@@ -61,20 +67,28 @@
       (funcall orig string)))
 
 (defun swank-track-package-hook (orig fun)
+  "Always update prompt instead only when *PACKAGE* change,
+because *DEFAULT-PATHNAME-DEFAULTS* might also change."
   (if (unix-in-slime-p)
       (unwind-protect (funcall fun)
-        (swank::send-to-emacs
-         (list :new-package (package-name *package*)
-               (concat (swank::package-string-for-prompt *package*) " "
-                       (uiop:native-namestring *default-pathname-defaults*)))))
+        (swank::send-to-emacs (list :new-package (package-name *package*)
+                                    (swank::package-string-for-prompt *package*))))
       (funcall orig fun)))
+
+(defun swank-package-string-for-prompt-hook (orig package)
+  (if (unix-in-slime-p)
+      (concat (funcall orig package) " "
+              (uiop:native-namestring *default-pathname-defaults*))
+      (funcall orig package)))
 
 (defun swank-add-connection-hook (orig conn)
   "Add Unix in SLIME connection to the last of `swank::*connections*',
 so that we never automatically become the default REPL."
   (if (unix-in-slime-p conn)
-      (swank::with-lock swank::*connection-lock*
-        (alexandria:nconcf swank::*connections* (list conn)))
+      (prog1
+        (swank::with-lock swank::*connection-lock*
+          (alexandria:nconcf swank::*connections* (list conn)))
+        (setup))
       (funcall orig conn)))
 
 (defun swank-globally-redirect-io-p-hook (orig)
@@ -85,7 +99,7 @@ thread-local/connection-local)."
   (unless (unix-in-slime-p)
     (funcall orig)))
 
-(defun slime-install (&optional skip-installed)
+(defun slime-install ()
   (cl-advice:add-advice :around 'swank::add-connection 'swank-add-connection-hook)
 
    (cl-advice:add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
@@ -93,18 +107,23 @@ thread-local/connection-local)."
    ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
    ;; I feel like at least one of the two uses is subtlely wrong
   (cl-advice:add-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
+  (cl-advice:add-advice :around 'swank::fuzzy-find-matching-symbols 'swank-fuzzy-find-matching-symbols-hook)
 
   (cl-advice:add-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
   (cl-advice:add-advice :around 'swank-repl::track-package 'swank-track-package-hook)
+  (cl-advice:add-advice :around 'swank-repl::package-string-for-prompt 'swank-package-string-for-prompt-hook)
 
   (cl-advice:add-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
 
   (setq swank::*auto-abbreviate-dotted-packages* nil)
-  (setq swank:*default-worker-thread-bindings* `((*readtable* . ,*readtable*))))
+  (setq swank:*default-worker-thread-bindings*
+        `((*readtable* . ,*readtable*)
+          (*default-pathname-defaults* . ,*default-pathname-defaults*))))
 
 (defun slime-uninstall ()
   (cl-advice:remove-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
 
+  (cl-advice:remove-advice :around 'swank-repl::package-string-for-prompt 'swank-package-string-for-prompt-hook)
   (cl-advice:remove-advice :around 'swank-repl::track-package 'swank-track-package-hook)
   (cl-advice:remove-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
 
@@ -119,6 +138,6 @@ thread-local/connection-local)."
 (defun ensure-swank-server (default-port)
   "Make sure a swank server for Unix in SLIME is running.
 Return its port.  Start one on DEFAULT-PORT if none is running yet."
-  (install t)
+  (ignore-some-conditions (already-installed) (install))
   (ensure *swank-port*
     (swank:create-server :port default-port :dont-close t)))

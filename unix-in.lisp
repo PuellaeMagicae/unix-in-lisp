@@ -17,7 +17,7 @@
 ;;;; package system mounting
 
 (-> mount-file (t) symbol)
-(-> ensure-path (t &optional boolean) pathname)
+(-> ensure-path (t &optional boolean) string)
 (-> mount-directory (t) package)
 (-> ensure-homed-symbol (string package) symbol)
 
@@ -48,42 +48,37 @@ for `package-name's and `symbol-name's."
 (defun package-path (package)
   "Returns the pathname of the directory mounted to PACKAGE,
 or NIL if PACKAGE is not a UNIX FS package."
-  (uiop:absolute-pathname-p
-   (uiop:parse-native-namestring
-    (unconvert-case (package-name package)))))
+  (let ((n (package-name package)))
+    (when (ppath:isabs n)
+      (unconvert-case n))))
 
 (defun symbol-path (symbol &optional relative)
   "Returns the pathname of the file mounted to SYMBOL,
 Signals an error if the home package SYMBOL is not a Unix FS package."
-  (uiop:merge-pathnames*
-   (uiop:parse-native-namestring (unconvert-case (symbol-name symbol)))
-   (if-let (package-path (package-path (symbol-package symbol)))
-     (pathname-utils:force-directory package-path)
-     (if relative
-         *default-pathname-defaults*
-         (error "Home package ~S of ~S is not a Unix FS package."
-                (symbol-package symbol) symbol)))))
+  (ppath:join
+   (or (package-path (symbol-package symbol))
+       (if relative
+           (uiop:native-namestring *default-pathname-defaults*)
+           (error "Home package ~S of ~S is not a Unix FS package."
+                  (symbol-package symbol) symbol)))
+   (unconvert-case (symbol-name symbol))))
 
 (defun symbol-home-p (symbol) (eq *package* (symbol-package symbol)))
 
 (defun ensure-path (path &optional relative)
-  "Return the pathname designated by PATH."
+  "Return the path designated by PATH."
   (when (symbolp path)
     (setq path (symbol-path path relative)))
   (when (pathnamep path)
     (setq path (uiop:native-namestring path)))
-  (setq path (ppath:expanduser path))
-  (setq path (uiop:parse-unix-namestring path))
-  (unless (uiop:absolute-pathname-p path)
+  (setq path (ppath:normpath (ppath:expanduser path)))
+  (unless (ppath:isabs path)
     (if relative
-        (setq path (uiop:merge-pathnames* path))
+        (setq path (ppath:join (uiop:native-namestring *default-pathname-defaults*) path))
         (error "~S is not an absolute path." path)))
   path)
 
-(defun force-file (path)
-  (setq path (uiop:native-namestring path))
-  (setq path (string-right-trim "/" path))
-  (setq path (uiop:parse-unix-namestring path)))
+(defun to-dir (path) (ppath:join path ""))
 
 (define-condition wrong-file-kind (simple-error file-error)
   ((wanted-kind :initarg :wanted-kind) (actual-kind :initarg :actual-kind))
@@ -99,7 +94,7 @@ Signals an error if the home package SYMBOL is not a Unix FS package."
      (format s "~a does not exist." (file-error-pathname c)))))
 
 (defun assert-file-kind (path &rest kinds)
-  (let ((kind (osicat:file-kind path :follow-symlinks t)))
+  (let ((kind (osicat:file-kind (uiop:parse-native-namestring path) :follow-symlinks t)))
     (unless (member kind kinds)
       (if kind
           (error 'wrong-file-kind :pathname path :wanted-kind kinds :actual-kind kind)
@@ -116,18 +111,17 @@ last mount.")
 (defun mount-directory (path)
   "Mount PATH as a Unix FS package, which must be a directory.
 Return the mounted package."
-  (setq path (ensure-path path))
-  (assert (uiop:directory-pathname-p path))
+  (setq path (to-dir (ensure-path path)))
   (restart-case
       (assert-file-kind path :directory)
     (create-directory ()
       :test (lambda (c) (typep c 'file-does-not-exist))
-      (ensure-directories-exist path)))
-  (bind ((namestring (uiop:native-namestring path))
-         (package-name (convert-case namestring))
+      (ensure-directories-exist
+       (uiop:parse-native-namestring path))))
+  (bind ((package-name (convert-case path))
          (package (or (find-package package-name)
                       (uiop:ensure-package package-name)))
-         (stat (isys:stat namestring)))
+         (stat (isys:stat path)))
     ;; If mtime haven't changed, skip remounting.
     (when-let (old-stat (gethash package *stat-cache*))
       (when (= (isys:stat-mtime old-stat)
@@ -137,11 +131,12 @@ Return the mounted package."
     ;; In case the directory is already mounted, check and remove
     ;; symbols whose mounted file no longer exists
     (mapc (lambda (symbol)
-            (when (not (uiop:probe-file* (symbol-path symbol)))
+            (when (not (ppath:lexists (symbol-path symbol)))
               (unintern symbol package)))
           (package-exports package))
     (mapc #'mount-file (uiop:directory*
-                        (uiop:merge-pathnames* uiop:*wild-file-for-directory* path)))
+                        (uiop:merge-pathnames* uiop:*wild-file-for-directory*
+                                               (uiop:parse-native-namestring path))))
     package))
 
 (defun ensure-homed-symbol (symbol-name package)
@@ -161,11 +156,12 @@ Return the symbol."
 
 (defun mount-file (path)
   "Mount PATH as a symbol in the appropriate Unix FS package."
-  (setq path (force-file (ensure-path path)))
-  (bind ((directory (uiop:native-namestring (ensure-path (pathname-utils:to-directory path))))
-         (file (uiop:native-namestring (pathname-utils:to-file path)))
+  (setq path (ensure-path path))
+  (bind (((directory . file) (ppath:split path))
          (package (or (find-package (convert-case directory)) (mount-directory directory))))
     (let ((symbol (ensure-homed-symbol (convert-case file) package)))
+      (unless (ppath:lexists path)
+        (error 'file-does-not-exist :pathname path))
       (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
       (export symbol (symbol-package symbol))
       (ensure-executable symbol)
@@ -180,9 +176,9 @@ Return the symbol."
 ;;;; Structured file abstraction
 
 (defun access-file (path)
-  (if (uiop:directory-exists-p path)
+  (if (uiop:directory-exists-p (uiop:parse-native-namestring path))
       (mount-directory (pathname-utils:force-directory path))
-      (uiop:read-file-lines path)))
+      (uiop:read-file-lines (uiop:parse-native-namestring path))))
 
 (defun (setf access-file) (new-value path)
   (let ((kind (osicat:file-kind path :follow-symlinks t)))
@@ -650,7 +646,7 @@ types of objects."))
                                         (sb-ext:*posix-argv* (cons (uiop:native-namestring path) args)))
                                     (load stream))))
                            (close stream)))
-                       :description (uiop:native-namestring (pathname-utils:to-file path))
+                       :description (cdr (ppath:split path))
                        :input input :output output :error error)
         (progn
           (close stream)
@@ -712,7 +708,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
                   'simple-process
                   :process
                   (sb-ext:run-program
-                   path args
+                   (uiop:parse-native-namestring path) args
                    :wait nil
                    :input input-1 :output output-1 :error error-1
                    :directory *default-pathname-defaults*
@@ -765,12 +761,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 ;;; Built-in commands
 
 (defmacro cd (&optional (path "~"))
-  `(bind ((%path (pathname-utils:force-directory (ensure-path ,(list 'fare-quasiquote:quasiquote path) t)))
-          (package (mount-directory %path)))
-     (setq *default-pathname-defaults* %path)
-     (let ((use-list (remove-if #'package-path (package-use-list *package*))))
-       (uiop:ensure-package (package-name *package*) :mix (append use-list (list package))))
-     package))
+  `(bind ((%path (pathname-utils:force-directory (ensure-path ,(list 'fare-quasiquote:quasiquote path) t))))
+     (setq *default-pathname-defaults* %path)))
 
 ;;; Reader syntax hacks
 
@@ -949,13 +941,11 @@ symbol bindings."
           (get-env-names))
     package))
 
-(defun install (&optional skip-installed)
+(defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
-    (if skip-installed
-        (return-from install nil)
-        (restart-case (error 'already-installed)
-          (continue () :report "Uninstall first, then reinstall." (uninstall))
-          (reckless-continue () :report "Install on top of it."))))
+    (restart-case (error 'already-installed)
+      (continue () :report "Uninstall first, then reinstall." (uninstall))
+      (reckless-continue () :report "Install on top of it.")))
   (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
     (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
                       (handler-case
@@ -968,7 +958,7 @@ symbol bindings."
           (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
                 ((not (symbol-package symbol)) (call-next-method))
                 ((package-path (symbol-package symbol))
-                 (write-string (uiop:native-namestring (symbol-path symbol)) stream))
+                 (write-string (symbol-path symbol) stream))
                 (t (call-next-method)))
           (call-next-method)))
     (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
@@ -994,7 +984,7 @@ symbol bindings."
   (values))
 
 (defun setup ()
-  (install t)
+  (ignore-some-conditions (already-installed) (install))
   (named-readtables:in-readtable unix-in-lisp)
   (setq *package* (uiop:ensure-package "UNIX-USER" :use (list "UNIX-IN-LISP.COMMON")))
   (cd)

@@ -64,9 +64,7 @@
           (setq unix-in-slime-port port)
           ;; don't let `slime-connect' change default connection
           (let ((slime-default-connection slime-default-connection))
-            (slime-connect "localhost" port)
-            (slime-eval-async
-                `(cl:funcall (cl:find-symbol "SETUP" "UNIX-IN-LISP"))))))
+            (slime-connect "localhost" port))))
     (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
 (defun unix-in-slime-p ()
