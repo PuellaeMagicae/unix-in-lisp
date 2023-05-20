@@ -35,7 +35,7 @@ Counting number of files
 #+end_src
 But why not the Lisp way as well!
 #+begin_src 
-  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (length (serapeum:package-exports))
+  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (length (package-exports ./))
   9
 #+end_src
 
