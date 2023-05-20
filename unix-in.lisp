@@ -641,10 +641,11 @@ types of objects."))
                        (lambda ()
                          (unwind-protect
                               (uiop:with-current-directory (directory)
-                                (with-standard-io-syntax
-                                  (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
-                                        (sb-ext:*posix-argv* (cons (uiop:native-namestring path) args)))
-                                    (load stream))))
+                                (let ((*default-pathname-defaults* directory))
+                                  (with-standard-io-syntax
+                                    (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
+                                          (sb-ext:*posix-argv* (cons (uiop:native-namestring path) args)))
+                                      (load stream)))))
                            (close stream)))
                        :description (cdr (ppath:split path))
                        :input input :output output :error error)
