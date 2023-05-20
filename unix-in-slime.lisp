@@ -113,23 +113,31 @@ thread-local/connection-local)."
   (unless (unix-in-slime-p)
     (funcall orig)))
 
+(defvar *swank-hooks* nil)
+
+(defun safe-add-advice (where function advice)
+  (if (fboundp function)
+      (progn
+        (cl-advice:add-advice where function advice)
+        (push (list where function advice) *swank-hooks*))
+      (warn "~S is not fbound, not adding ~S." function advice)))
+
 (defun slime-install ()
-  (cl-advice:add-advice :around 'swank::add-connection 'swank-add-connection-hook)
+  (safe-add-advice :around 'swank::add-connection 'swank-add-connection-hook)
 
-  (cl-advice:add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
-  (cl-advice:add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
-  ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
-  ;; I feel like at least one of the two uses is subtlely wrong
-  (cl-advice:add-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
-  (cl-advice:add-advice :around 'swank::fuzzy-find-matching-symbols 'swank-fuzzy-find-matching-symbols-hook)
-  (cl-advice:add-advice :around 'swank::find-matching-symbols 'swank-find-matching-symbols-hook)
-  (cl-advice:add-advice :around 'swank::matching-symbols 'swank-matching-symbols-hook)
+  (safe-add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
+  (safe-add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
 
-  (cl-advice:add-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
-  (cl-advice:add-advice :around 'swank-repl::track-package 'swank-track-package-hook)
-  (cl-advice:add-advice :around 'swank-repl::package-string-for-prompt 'swank-package-string-for-prompt-hook)
+  (safe-add-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
+  (safe-add-advice :around 'swank::fuzzy-find-matching-symbols 'swank-fuzzy-find-matching-symbols-hook)
+  (safe-add-advice :around 'swank::find-matching-symbols 'swank-find-matching-symbols-hook)
+  (safe-add-advice :around 'swank::matching-symbols 'swank-matching-symbols-hook)
 
-  (cl-advice:add-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
+  (safe-add-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
+  (safe-add-advice :around 'swank-repl::track-package 'swank-track-package-hook)
+  (safe-add-advice :around 'swank-repl::package-string-for-prompt 'swank-package-string-for-prompt-hook)
+
+  (safe-add-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
 
   (setq swank::*auto-abbreviate-dotted-packages* nil)
   (setq swank:*default-worker-thread-bindings*
@@ -137,20 +145,8 @@ thread-local/connection-local)."
           (*default-pathname-defaults* . ,*default-pathname-defaults*))))
 
 (defun slime-uninstall ()
-  (cl-advice:remove-advice :around 'swank-repl::globally-redirect-io-p 'swank-globally-redirect-io-p-hook)
-
-  (cl-advice:remove-advice :around 'swank-repl::package-string-for-prompt 'swank-package-string-for-prompt-hook)
-  (cl-advice:remove-advice :around 'swank-repl::track-package 'swank-track-package-hook)
-  (cl-advice:remove-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
-
-  (cl-advice:remove-advice :around 'swank::matching-symbols 'swank-matching-symbols-hook)
-  (cl-advice:remove-advice :around 'swank::find-matching-symbols 'swank-find-matching-symbols-hook)
-  (cl-advice:remove-advice :around 'swank::fuzzy-find-matching-symbols 'swank-fuzzy-find-matching-symbols-hook)
-  (cl-advice:remove-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
-  (cl-advice:remove-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
-  (cl-advice:remove-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
-
-  (cl-advice:remove-advice :around 'swank::add-connection 'swank-add-connection-hook))
+  (iter (while *swank-hooks*)
+    (apply #'cl-advice:remove-advice (pop *swank-hooks*))))
 (cl-advice:add-advice :after 'install 'slime-install)
 (cl-advice:add-advice :before 'uninstall 'slime-uninstall)
 

@@ -977,6 +977,8 @@ symbol bindings."
        (handler-bind ((package-error #'continue))
          (delete-package p))))
    (list-all-packages))
+  (when (find-package "UNIX-USER")
+    (delete-package "UNIX-USER"))
   (when (find-package "UNIX-IN-LISP.COMMON")
     (delete-package "UNIX-IN-LISP.COMMON"))
   (when (find-package "UNIX-IN-LISP.PATH")
