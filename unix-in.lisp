@@ -9,6 +9,7 @@
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
 
 (in-package #:unix-in-lisp)
+(named-readtables:in-readtable :standard)
 
 (defvar *post-command-hook* (make-instance 'nhooks:hook-void))
 
@@ -665,6 +666,8 @@ types of objects."))
   (:documentation "Convert Lisp OBJECT to Unix command argument.")
   (:method (object) (princ-to-string object))
   (:method ((symbol symbol))  (prin1-to-string symbol))
+  (:method ((seq native-lazy-seq:lazy-seq))
+    (to-argument (coerce seq 'list)))
   (:method ((list list))
     "Elements of LIST are concatenated together.
 This implies: 1. if a command output a single line, its result can be
@@ -734,9 +737,10 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
     ;; substitutions.
     `(macrolet ((fare-quasiquote::append (&rest args)
                   `(append ,@ (mapcar (lambda (arg) `(coerce ,arg 'list)) args)))
-                (fare-quasiquote::quote (&rest x)
-                  `',(append (butlast x) (car (last x))
-                             (coerce (cdr (last x)) 'list))))
+                (fare-quasiquote::cons (x y)
+                  `(cons ,x (coerce ,y 'list)))
+                (fare-quasiquote::list* (&rest x)
+                  `(list* ,@(butlast x) (coerce ,(lastcar x) 'list))))
        (execute-command
         ',command
         ,(list 'fare-quasiquote:quasiquote command-args)
@@ -766,7 +770,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 ;;; Built-in commands
 
 (defmacro cd (&optional (path "~"))
-  `(bind ((%path (pathname-utils:force-directory (ensure-path ,(list 'fare-quasiquote:quasiquote path) t))))
+  `(bind ((%path (pathname-utils:force-directory
+                  (ensure-path ,(list 'fare-quasiquote:quasiquote path) t))))
      (setq *default-pathname-defaults* %path)))
 
 ;;; Reader syntax hacks
@@ -807,9 +812,12 @@ Currently, this is intended to be used for *both* /path syntax and
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (if (symbol-home-p symbol)
-        (let ((path (ensure-path symbol)))
+        (let ((path (ensure-path (unconvert-case (symbol-name symbol)))))
           (if (ppath:lexists path)
-              (mount-file (symbol-name symbol))
+              (progn
+                ;; avoid polluting package
+                (unintern symbol)
+                (mount-file (symbol-name symbol)))
               symbol))
         symbol)))
 
@@ -827,12 +835,17 @@ Currently, this is intended to be used for *both* /path syntax and
     symbol))
 
 (named-readtables:defreadtable unix-in-lisp
-  (:merge :fare-quasiquote)
+  (:merge :standard)
   (:macro-char #\. 'dot-read-macro t)
   (:macro-char #\/ 'slash-read-macro t)
   (:macro-char #\~ 'slash-read-macro t)
   (:macro-char #\$ 'dollar-read-macro t)
+
   (:case :invert))
+
+(fare-quasiquote:enable-quasiquote
+ :expansion-time 'macroexpand
+ :table (named-readtables:find-readtable 'unix-in-lisp))
 
 (defun unquote-reader-hook (orig thunk)
   (if (= fare-quasiquote::*quasiquote-level* 0)
@@ -965,7 +978,9 @@ symbol bindings."
       (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
     (ensure-common-package "UNIX-IN-LISP.COMMON")
     (defmethod print-object :around ((symbol symbol) stream)
-      (if *print-escape*
+      (if (and *print-escape*
+               (eq (named-readtables:readtable-name swank::*buffer-readtable*)
+                   'unix-in-lisp))
           (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
                 ((not (symbol-package symbol)) (call-next-method))
                 ((package-path (symbol-package symbol))
@@ -998,7 +1013,7 @@ symbol bindings."
 
 (defun setup ()
   (ignore-some-conditions (already-installed) (install))
-  (named-readtables:in-readtable unix-in-lisp)
   (setq *package* (uiop:ensure-package "UNIX-USER" :use (list "UNIX-IN-LISP.COMMON")))
+  (named-readtables:in-readtable unix-in-lisp)
   (cd)
   (values))

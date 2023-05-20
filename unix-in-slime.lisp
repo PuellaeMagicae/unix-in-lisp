@@ -2,7 +2,9 @@
 (named-readtables:in-readtable :standard)
 
 (defun swank-untokenize-symbol-hook (orig package-name internal-p symbol-name)
-  (cond ((and (string-prefix-p "/" package-name) (not internal-p))
+  (cond ((and (string-prefix-p "/" package-name) (not internal-p)
+              (eq (named-readtables:readtable-name swank::*buffer-readtable*)
+                  'unix-in-lisp))
          (if (and (unix-in-slime-p)
                   (string-prefix-p (uiop:native-namestring *default-pathname-defaults*) package-name))
              (concat (subseq package-name (length (uiop:native-namestring *default-pathname-defaults*)))
@@ -17,6 +19,8 @@
            (if convert-case-p (unconvert-case s) s)))
     (handler-case
         (cond ((and (not package-name)
+                    (eq (named-readtables:readtable-name swank::*buffer-readtable*)
+                        'unix-in-lisp)
                     (or (string-prefix-p "~" symbol-name)
                         (string-prefix-p "/" symbol-name)
                         (and (unix-in-slime-p)
@@ -37,7 +41,8 @@
   (multiple-value-call #'swank-tokenize-symbol-convert (funcall orig string) t))
 
 (defun swank-fuzzy-find-matching-symbols-hook (orig string package &rest args)
-  (if (and (eq package swank::*buffer-package*) (unix-in-slime-p))
+  (if (and (eq package swank::*buffer-package*)
+           (unix-in-slime-p))
       (bind (((:values matchings time-limit)
               (apply orig string (mount-directory *default-pathname-defaults*) args))
              ((:values matchings-1 time-limit-1)
