@@ -508,10 +508,11 @@ The returned fd-stream is intended to be passed to a child process,
 and will be closed after child process creation.")
   (:method ((object (eql :stream))) :stream)
   (:method ((p process-mixin))
-    (prog1
-        (read-fd-stream (process-output p))
-      ;; The consumer takes the output stream exclusively
-      (setf (process-output p) nil)))
+    (synchronized (p)
+      (prog1
+          (read-fd-stream (process-output p))
+        ;; The consumer takes the output stream exclusively
+        (setf (process-output p) nil))))
   (:method ((s sb-sys:fd-stream)) s)
   (:method ((s string))
     "Don't turn a STRING into lines of single characters."
@@ -554,10 +555,11 @@ and will be closed after child process creation.")
   (:method ((object (eql :stream))) :stream)
   (:method ((object (eql :output))) :output)
   (:method ((p process-mixin))
-    (prog1
-        (write-fd-stream (process-input p))
-      ;; The producer takes the output stream exclusively
-      (setf (process-input p) nil)))
+    (synchronized (p)
+      (prog1
+          (write-fd-stream (process-input p))
+        ;; The producer takes the output stream exclusively
+        (setf (process-input p) nil))))
   (:method ((s sb-sys:fd-stream)) s)
   (:method ((s stream))
     (bind (((:values read-fd write-fd) (osicat-posix:pipe)))
