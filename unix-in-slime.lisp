@@ -1,4 +1,5 @@
 (in-package #:unix-in-lisp)
+(named-readtables:in-readtable :standard)
 
 (defun swank-untokenize-symbol-hook (orig package-name internal-p symbol-name)
   (cond ((and (string-prefix-p "/" package-name) (not internal-p))
@@ -103,10 +104,8 @@ because *DEFAULT-PATHNAME-DEFAULTS* might also change."
   "Add Unix in SLIME connection to the last of `swank::*connections*',
 so that we never automatically become the default REPL."
   (if (unix-in-slime-p conn)
-      (prog1
-        (swank::with-lock swank::*connection-lock*
-          (alexandria:nconcf swank::*connections* (list conn)))
-        (setup))
+      (swank::with-lock swank::*connection-lock*
+        (alexandria:nconcf swank::*connections* (list conn)))
       (funcall orig conn)))
 
 (defun swank-globally-redirect-io-p-hook (orig)
@@ -116,6 +115,22 @@ connection, because it does not support multiple listeners well
 thread-local/connection-local)."
   (unless (unix-in-slime-p)
     (funcall orig)))
+
+(defun swank-repl-loop-hook (connection)
+  (declare (ignore connection))
+  (setup))
+
+(defun swank-create-repl-hook (orig &rest args)
+  "Ugly hack to make the prompt on first start up display reasonably.
+Otherwise for some reason the `*package*' is not setup when M-x unix-in-slime
+is called the first time???"
+  (if (unix-in-slime-p)
+      (let ((*package*
+              (uiop:ensure-package "UNIX-USER" :use (list "UNIX-IN-LISP.COMMON")))
+            (*default-pathname-defaults*
+              (pathname-utils:force-directory (ensure-path "~"))))
+        (apply orig args))
+      (apply orig args)))
 
 (defvar *swank-hooks* nil)
 
@@ -146,7 +161,10 @@ thread-local/connection-local)."
   (setq swank::*auto-abbreviate-dotted-packages* nil)
   (setq swank:*default-worker-thread-bindings*
         `((*readtable* . ,*readtable*)
-          (*default-pathname-defaults* . ,*default-pathname-defaults*))))
+          (*default-pathname-defaults* . ,*default-pathname-defaults*)))
+
+  (safe-add-advice :before 'swank-repl::repl-loop 'swank-repl-loop-hook)
+  (safe-add-advice :around 'swank-repl::create-repl 'swank-create-repl-hook))
 
 (defun slime-uninstall ()
   (iter (while *swank-hooks*)
