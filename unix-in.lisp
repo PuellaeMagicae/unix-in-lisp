@@ -862,6 +862,8 @@ Common Lisp)."
 (defmacro toplevel (&body body)
   "Evaluate BODY, but with ergonomics improvements for using as a shell.
 1. Use `compute-lexifications' to support relative symbol accesses.
+Like in Unix, never shadow an existing function binding to avoid easy
+arbitrary code execution.
 2. Use `repl-connect' to give returned primary value special
 treatment if possible."
   (let ((lex (compute-lexifications body)))
@@ -872,7 +874,9 @@ treatment if possible."
                      (collect `(,from ,to)))
                 (macrolet
                     ,(iter (for (from . to) in lex)
-                       (collect `(,from (&rest args) `(,',to ,@args))))
+                       ;; Don't shadow existing function bindings
+                       (unless (fboundp from)
+                         (collect `(,from (&rest args) `(,',to ,@args)))))
                   ,@body)))))
        (when (repl-connect (car result))
          (pop result))
