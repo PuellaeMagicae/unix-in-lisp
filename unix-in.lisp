@@ -160,8 +160,6 @@ Return the symbol."
   (bind (((directory . file) (ppath:split path))
          (package (or (find-package (convert-case directory)) (mount-directory directory))))
     (let ((symbol (ensure-homed-symbol (convert-case file) package)))
-      (unless (ppath:lexists path)
-        (error 'file-does-not-exist :pathname path))
       (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
       (export symbol (symbol-package symbol))
       (ensure-executable symbol)
@@ -188,8 +186,12 @@ Return the symbol."
       (stream path :direction :output
                    :if-exists :supersede
                    :if-does-not-exist :create)
-    (let ((*standard-output* stream))
-      (mapc #'write-line new-value))))
+    (let ((read-stream (read-fd-stream new-value)))
+      (unwind-protect
+           (ignore-some-conditions (end-of-file)
+             (loop (write-char (read-char read-stream) stream)))
+        (close read-stream))))
+  new-value)
 
 (defmacro file (symbol)
   `(access-file (ensure-path ',symbol)))
@@ -211,8 +213,8 @@ Code should then use the returned symbol in place of SYMBOL."
                (reckless-continue () :report "Unintern the symbol and retry."
                  (ensure-symbol-macro (reintern-symbol symbol) form)))))))
 
-#+nil (defmacro defile (symbol &optional initform)
-  (setq symbol (canonical-symbol symbol))
+(defmacro defile (symbol &optional initform)
+  (setq symbol (mount-file (ensure-path symbol t)))
   (setq symbol (ensure-symbol-macro symbol `(access-file (symbol-path ',symbol))))
   `(progn
      ,(when initform `(setf ,symbol ,initform))
@@ -805,9 +807,10 @@ Currently, this is intended to be used for *both* /path syntax and
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (if (symbol-home-p symbol)
-        (handler-case
-            (mount-file (symbol-name symbol))
-          (file-error () symbol))
+        (let ((path (ensure-path symbol)))
+          (if (ppath:lexists path)
+              (mount-file (symbol-name symbol))
+              symbol))
         symbol)))
 
 (defun dollar-read-macro (stream char)
@@ -854,9 +857,10 @@ Common Lisp)."
      (lambda (form)
        (when (and (symbolp form) (symbol-home-p form))
          (ensure (gethash form map)
-           (or (ignore-some-conditions (file-error)
-                 (mount-file (ensure-path form t)))
-               form))))
+           (let ((path (ensure-path form t)))
+             (if (ppath:lexists path)
+                 (mount-file path)
+                 form)))))
      body)
     (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
                (alexandria:hash-table-alist map))))
