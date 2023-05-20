@@ -71,12 +71,12 @@ Signals an error if the home package SYMBOL is not a Unix FS package."
     (setq path (symbol-path path relative)))
   (when (pathnamep path)
     (setq path (uiop:native-namestring path)))
-  (setq path (ppath:normpath (ppath:expanduser path)))
+  (setq path (ppath:expanduser path))
   (unless (ppath:isabs path)
     (if relative
         (setq path (ppath:join (uiop:native-namestring *default-pathname-defaults*) path))
         (error "~S is not an absolute path." path)))
-  path)
+  (ppath:normpath path))
 
 (defun to-dir (path) (ppath:join path ""))
 

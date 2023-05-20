@@ -2,7 +2,11 @@
 
 (defun swank-untokenize-symbol-hook (orig package-name internal-p symbol-name)
   (cond ((and (string-prefix-p "/" package-name) (not internal-p))
-         (concat package-name symbol-name))
+         (if (and (unix-in-slime-p)
+                  (string-prefix-p (uiop:native-namestring *default-pathname-defaults*) package-name))
+             (concat (subseq package-name (length (uiop:native-namestring *default-pathname-defaults*)))
+                     symbol-name)
+             (concat package-name symbol-name)))
         (t (funcall orig package-name internal-p symbol-name))))
 
 (defun swank-tokenize-symbol-convert (symbol-name package-name internal-p convert-case-p)
