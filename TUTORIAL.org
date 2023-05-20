@@ -9,9 +9,10 @@ mcd () {
 #+end_src
 
 #+begin_src lisp
-(defcommand mcd (dir)
-  (mkdir -p ,dir)
-  (cd ,dir))
+(defmacro mcd (dir)
+  `(progn
+     (mkdir -p ,dir)
+     (cd ,dir)))
 #+end_src
 ** Data Wrangling
 To get the data, in POSIX shell they write:
