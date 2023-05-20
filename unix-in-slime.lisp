@@ -40,6 +40,20 @@
         (values (concatenate 'vector matchings matchings-1) time-limit-1))
       (apply orig string package args)))
 
+(defun swank-find-matching-symbols-hook (orig string package &rest args)
+  (if (and (eq package swank::*buffer-package*) (unix-in-slime-p))
+      (bind ((matchings (apply orig string (mount-directory *default-pathname-defaults*) args))
+             (matchings-1 (apply orig string package args)))
+        (nconc matchings matchings-1))
+      (apply orig string package args)))
+
+(defun swank-matching-symbols-hook (orig package &rest args)
+  (if (and (eq package swank::*buffer-package*) (unix-in-slime-p))
+      (bind ((matchings (apply orig (mount-directory *default-pathname-defaults*) args))
+             (matchings-1 (apply orig package args)))
+        (nconc matchings matchings-1))
+      (apply orig package args)))
+
 (defvar *swank-port* nil)
 
 (defun unix-in-slime-p (&optional (conn swank::*emacs-connection*))
@@ -102,12 +116,14 @@ thread-local/connection-local)."
 (defun slime-install ()
   (cl-advice:add-advice :around 'swank::add-connection 'swank-add-connection-hook)
 
-   (cl-advice:add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
-   (cl-advice:add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
-   ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
-   ;; I feel like at least one of the two uses is subtlely wrong
+  (cl-advice:add-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
+  (cl-advice:add-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
+  ;; Difference: `swank::tokenize-symbol-thoroughly' handles escape characters
+  ;; I feel like at least one of the two uses is subtlely wrong
   (cl-advice:add-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
   (cl-advice:add-advice :around 'swank::fuzzy-find-matching-symbols 'swank-fuzzy-find-matching-symbols-hook)
+  (cl-advice:add-advice :around 'swank::find-matching-symbols 'swank-find-matching-symbols-hook)
+  (cl-advice:add-advice :around 'swank::matching-symbols 'swank-matching-symbols-hook)
 
   (cl-advice:add-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
   (cl-advice:add-advice :around 'swank-repl::track-package 'swank-track-package-hook)
@@ -127,7 +143,10 @@ thread-local/connection-local)."
   (cl-advice:remove-advice :around 'swank-repl::track-package 'swank-track-package-hook)
   (cl-advice:remove-advice :around 'swank-repl::eval-region 'swank-eval-region-hook)
 
-  (cl-advice:remove-advice :around 'swank::tokenize-symbol-thoroughly)
+  (cl-advice:remove-advice :around 'swank::matching-symbols 'swank-matching-symbols-hook)
+  (cl-advice:remove-advice :around 'swank::find-matching-symbols 'swank-find-matching-symbols-hook)
+  (cl-advice:remove-advice :around 'swank::fuzzy-find-matching-symbols 'swank-fuzzy-find-matching-symbols-hook)
+  (cl-advice:remove-advice :around 'swank::tokenize-symbol-thoroughly 'swank-tokenize-symbol-thoroughly-hook)
   (cl-advice:remove-advice :around 'swank::tokenize-symbol 'swank-tokenize-symbol-hook)
   (cl-advice:remove-advice :around 'swank::untokenize-symbol 'swank-untokenize-symbol-hook)
 
