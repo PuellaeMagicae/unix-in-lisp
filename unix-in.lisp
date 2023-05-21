@@ -8,10 +8,6 @@
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
 
-(uiop:define-package :unix-in-lisp.common)
-(uiop:define-package :unix-user
-  (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
-
 (in-package #:unix-in-lisp)
 (named-readtables:in-readtable :standard)
 
@@ -978,6 +974,9 @@ symbol bindings."
                 (ensure-env-var symbol name)
                 (export symbol)))
             (get-env-names)))
+    ;; Create UNIX-USER
+    (uiop:define-package :unix-user
+        (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
     (defmethod print-object :around ((symbol symbol) stream)
       (if (and *print-escape*
                (eq (named-readtables:readtable-name *readtable*)
@@ -1004,8 +1003,12 @@ symbol bindings."
        (handler-bind ((package-error #'continue))
          (delete-package p))))
    (list-all-packages))
-  (when (find-package "UNIX-IN-LISP.PATH")
-    (delete-package "UNIX-IN-LISP.PATH"))
+  (when (find-package :unix-user)
+    (delete-package :unix-user))
+  (when (find-package :unix-in-lisp.common)
+    (delete-package :unix-in-lisp.common))
+  (when (find-package :unix-in-lisp.path)
+    (delete-package :unix-in-lisp.path))
   (values))
 
 (defun setup ()
