@@ -24,4 +24,6 @@ So here is this project. The rightmost column in the table lists the better inca
 Although at the current stage the project may look like a Lispy shell, I do not intend to create yet another™ shell™. There is no shell DSL. All examples are regular Common Lisp! I intend to make the Unix system accessible and used in regular Common Lisp programs and interactions, in a Lispy way if possible.
 
 Maybe a full distro one day, we can dream.
-*
+
+* Side notes
+ In some early version of Unix in Lisp, we starts the listener in Unix FS package directly, but we soon discover unfixable pitfalls to it. First, Lisp variables and functions entered in the listener become internal to the Unix FS package (directory-local), which is an unintuitive default behavior. Moreover, files in the current directory shadow system commands or Lisp functions, which easily leads to security blunders. I later considered creating a dedicated pacakge for each listener and let them use the Unix FS package of the current directory, but then it become inconvenient to share data between listeners and it's a pain to maintain package system states when we need to frequently change the current directory package. Moreover, we can't treat variable and function access to the current directory differently. Eventually I arrive at the current design which treats the current package and the current directory separately.

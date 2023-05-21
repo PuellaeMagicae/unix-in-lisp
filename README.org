@@ -16,6 +16,7 @@ Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinc
   - [[#unix-in-slime][Unix in SLIME]]
     - [[#performance-fast][Performance: fast!]]
     - [[#completion][Completion]]
+  - [[#package-system-structure][Package system structure]]
 
 * Quick Start
 Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazy-seq]] into =~/quicklisp/local-projects/=. Before first-time use, run ~(ql:quickload "unix-in-lisp")~ to ensure all dependencies are installed.
@@ -47,6 +48,22 @@ Directories are mapped as /Unix FS packages/. A Unix FS packages is any Common L
 The exported symbols of a Unix FS package should one-to-one correspond to files in the mapped directory. Exceptions to this one-to-one correspondence:
 - Because of the limit of file system change tracking, the package structure in the Common Lisp image may diverge from the Unix FS state.
   - Currently, the state of a Unix FS package is synchronized when calling ~mount-directory~. By default, ~remount-current-directory~ is added to ~*post-command-hook*~, which does the obvious thing.
+
+Each of these exported symbols has a global symbol macro binding, so that they can be read/write like Lisp variables. Access to the symbol gives the list of lines of the underlying file, and setting it with a list designator of lines cause them to be written to the file.
+
+#+begin_src
+unix-user /Users/kchan/> .bashrc
+("export CC=\"clang\"" "export PS1='$(hostname):$(pwd) $(whoami)\\$ '" ...)
+#+end_src
+
+Note that there are no corresponding symbol for a non-existent file. To write or create a file that you are not sure whether it already exists, it's recommended to use ~defile~ macro, which will ensure the file exists and creates the corresponding symbol.
+#+begin_src
+unix-user /Users/kchan/> (defile iota.txt (iota 10))
+/Users/kchan/iota.txt
+unix-user /Users/kchan/> iota.txt
+("0" "1" "2" "3" "4" "5" "6" "7" "8" "9")
+#+end_src
+In the above example, if ~iota.txt~ does not exist and I use ~setq~ instead of ~defile~, an internal symbol named ~IOTA.TXT~ will be created in ~UNIX-USER~ package instead and I will write to its value cell, rather than ~/Users/kchan/iota.txt~ on the file system.
 
 ** Command and Process Mapping
 Unix in Lisp manages jobs in the unit of /Effective processes/. Theses include regular Unix processes represented by ~simple-process~, and ~pipeline~'s which are consisted of any number of UNIX processes and Lisp function stages.
@@ -179,3 +196,7 @@ A quite unintended achievement is that ~unix-in-slime~ is a very fast shell for 
 
 *** Completion
 If you have configured completion for SLIME itself, completion works out of the box for ~unix-in-slime~. Note that we automagically get "filename completion", because they are mapped as symbols, and we have symbol completion at home! Currently there's one quirk: filenames are always completed to their fully resolved path (with ~.. . ~~ components resolved), because that's what corresponds to symbols. I'd say it's either a bug or a feature depending on who you ask, I'm leaving it like that for now.
+** Package system structure
+Unix in Lisp defines and populates a number of packages during ~unix-in-lisp:install~. First, ~unix-in-lisp:path~ is created according to ~$PATH~ environment variable. Then, ~unix-in-lisp.common~ is ensured to re-export ~unix-in-lisp.path~, and also export symbols corresponding to environment variables. Packages that wish to make use of Unix in Lisp functionalities should use ~unix-in-lisp.common~, and potentially shadowing import some of its symbols. Any other usage of packages created by Unix in Lisp is less safe, including using or importing symbols from the Unix FS packages, particularly because of the behavior of ~unix-in-lisp:uninstall~.
+
+The Unix in SLIME listener by default starts in ~unix-user~ package, which uses ~unix-in-lisp.common~ and another of other utility packages. This causes all listeners to share package by default, but you can also create new packages and switch listeners to it. Note that we /do not/ support current directory by /using/ its corresponding Unix FS package. Instead, a /lexification/ process is performed by the Unix in SLIME listener scans for value and function access to symbols denoting relative path, and redirect them to mounted symbols according to current directory (~*default-pathname-defaults*~). Similar to Unix, our redirection never shadows existing global function bindings, to avoid unintentionally execute files under current directory.
