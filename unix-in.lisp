@@ -8,6 +8,10 @@
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
 
+(uiop:define-package :unix-in-lisp.common)
+(uiop:define-package :unix-user
+    (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
+
 (in-package #:unix-in-lisp)
 (named-readtables:in-readtable :standard)
 
@@ -57,7 +61,8 @@ or NIL if PACKAGE is not a UNIX FS package."
   "Returns the pathname of the file mounted to SYMBOL,
 Signals an error if the home package SYMBOL is not a Unix FS package."
   (ppath:join
-   (or (package-path (symbol-package symbol))
+   (or (and (symbol-package symbol)
+            (package-path (symbol-package symbol)))
        (if relative
            (uiop:native-namestring *default-pathname-defaults*)
            (error "Home package ~S of ~S is not a Unix FS package."
@@ -974,9 +979,6 @@ symbol bindings."
                 (ensure-env-var symbol name)
                 (export symbol)))
             (get-env-names)))
-    ;; Create UNIX-USER
-    (uiop:define-package :unix-user
-        (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
     (defmethod print-object :around ((symbol symbol) stream)
       (if (and *print-escape*
                (eq (named-readtables:readtable-name *readtable*)
@@ -997,23 +999,30 @@ symbol bindings."
   (cl-advice:remove-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
   (when-let (method (find-method #'print-object '(:around) '(symbol t) nil))
     (remove-method #'print-object method))
+  ;; Delete all Unix FS packages
   (mapc
    (lambda (p)
      (when (package-path p)
        (handler-bind ((package-error #'continue))
          (delete-package p))))
    (list-all-packages))
-  (when (find-package :unix-user)
-    (delete-package :unix-user))
-  (when (find-package :unix-in-lisp.common)
-    (delete-package :unix-in-lisp.common))
+  ;; Reap UNIX-IN-LISP.COMMON of its content
+  (let ((*package* (find-package :unix-in-lisp.common)))
+    (unuse-package :unix-in-lisp.path)
+    (do-symbols (sym)
+      (unintern sym)
+      ;; Do a best effort at removing shadowing symbols
+      ;; created by `:mix' option of `uiop:define-package'
+      (dolist (p (package-used-by-list *package*))
+        (unintern sym p))))
+  ;; Delete UNIX-IN-LISP.PATH
   (when (find-package :unix-in-lisp.path)
     (delete-package :unix-in-lisp.path))
   (values))
 
 (defun setup ()
   (ignore-some-conditions (already-installed) (install))
-  (setq *package* (uiop:ensure-package "UNIX-USER" :use (list "UNIX-IN-LISP.COMMON")))
+  (in-package :unix-user)
   (named-readtables:in-readtable unix-in-lisp)
   (cd)
   (values))

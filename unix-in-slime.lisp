@@ -130,8 +130,7 @@ thread-local/connection-local)."
 Otherwise for some reason the `*package*' is not setup when M-x unix-in-slime
 is called the first time???"
   (if (unix-in-slime-p)
-      (let ((*package*
-              (uiop:ensure-package "UNIX-USER" :use (list "UNIX-IN-LISP.COMMON")))
+      (let ((*package* (find-package :unix-user))
             (*default-pathname-defaults*
               (pathname-utils:force-directory (ensure-path "~"))))
         (apply orig args))
