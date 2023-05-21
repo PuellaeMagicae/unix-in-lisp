@@ -1,4 +1,4 @@
-(uiop:define-package #:unix-in-lisp
+(uiop:define-package :unix-in-lisp
   (:use :cl :iter)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
@@ -7,6 +7,10 @@
                 #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
+
+(uiop:define-package :unix-in-lisp.common)
+(uiop:define-package :unix-user
+  (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
 
 (in-package #:unix-in-lisp)
 (named-readtables:in-readtable :standard)
@@ -952,34 +956,31 @@ symbol bindings."
             (subseq s 0 (position #\= s)))
           (sb-ext:posix-environ)))
 
-(defun ensure-common-package (package-name)
-  (bind ((use-list '(:unix-in-lisp :unix-in-lisp.path
-                     :serapeum :alexandria :cl))
-         (package (uiop:ensure-package package-name
-                                       :mix use-list
-                                       :reexport use-list)))
-    (mapc (lambda (name)
-            (let ((symbol (intern (concat "$" name) package) ))
-              (ensure-env-var symbol name)
-              (export symbol package)))
-          (get-env-names))
-    package))
-
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
     (restart-case (error 'already-installed)
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
   (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
+    ;;  Create UNIX-IN-LISP.PATH from $PATH
     (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
                       (handler-case
                           (collect (mount-directory (pathname-utils:force-directory path)))
                         (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
-      (uiop:ensure-package "UNIX-IN-LISP.PATH" :mix packages :reexport packages))
-    (ensure-common-package "UNIX-IN-LISP.COMMON")
+      (uiop:ensure-package :unix-in-lisp.path :mix packages :reexport packages))
+    ;; Populate UNIX-IN-LISP.COMMON
+    (uiop:ensure-package :unix-in-lisp.common
+                         :mix '(:unix-in-lisp.path)
+                         :reexport '(:unix-in-lisp.path))
+    (let ((*package* (find-package :unix-in-lisp.common)))
+      (mapc (lambda (name)
+              (let ((symbol (intern (concat "$" name))))
+                (ensure-env-var symbol name)
+                (export symbol)))
+            (get-env-names)))
     (defmethod print-object :around ((symbol symbol) stream)
       (if (and *print-escape*
-               (eq (named-readtables:readtable-name swank::*buffer-readtable*)
+               (eq (named-readtables:readtable-name *readtable*)
                    'unix-in-lisp))
           (cond ((eq (find-symbol (symbol-name symbol) *package*) symbol) (call-next-method))
                 ((not (symbol-package symbol)) (call-next-method))
@@ -1003,10 +1004,6 @@ symbol bindings."
        (handler-bind ((package-error #'continue))
          (delete-package p))))
    (list-all-packages))
-  (when (find-package "UNIX-USER")
-    (delete-package "UNIX-USER"))
-  (when (find-package "UNIX-IN-LISP.COMMON")
-    (delete-package "UNIX-IN-LISP.COMMON"))
   (when (find-package "UNIX-IN-LISP.PATH")
     (delete-package "UNIX-IN-LISP.PATH"))
   (values))
