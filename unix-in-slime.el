@@ -55,7 +55,10 @@
 
 ;;;###autoload
 (defun unix-in-slime ()
-  "Create a SLIME listener running Unix in Lisp."
+  "Create a SLIME listener running Unix in Lisp.
+This ensures a SLIME session is running from the current Emacs
+instance, and creates a swank server dedicated to Unix in Lisp
+listening on `unix-in-slime-default-port'."
   (interactive)
   (if (slime-connected-p)
       (slime-eval-async
@@ -72,8 +75,8 @@
 
 (defun unix-in-slime-p ()
   (when (and unix-in-slime-port (ignore-errors (slime-connection)))
-    (equal (cadr (process-contact (slime-connection)))
-           unix-in-slime-port)))
+    (equal (process-contact (slime-connection))
+           (list "localhost" unix-in-slime-port))))
 
 (defun unix-in-slime-disconnect-maybe ()
   (when (and (derived-mode-p 'slime-repl-mode) (unix-in-slime-p))
