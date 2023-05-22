@@ -24,7 +24,8 @@
 
 ;;; Commentary:
 
-;; This package adds ANSI colors and escape sequence to the SLIME REPL.
+;; This package implements Unix in SLIME listener based on the SLIME
+;; listener.
 
 ;;; Code:
 
@@ -46,9 +47,11 @@
 
 (define-advice slime-repl-emit
     (:after (string) unix-in-slime)
-  (with-current-buffer (slime-output-buffer)
-    (comint-carriage-motion slime-output-start slime-output-end)
-    (ansi-color-apply-on-region slime-output-start slime-output-end)))
+  "Add ANSI colors and escape sequence to the SLIME REPL."
+  (when (unix-in-slime-p)
+    (with-current-buffer (slime-output-buffer)
+      (comint-carriage-motion slime-output-start slime-output-end)
+      (ansi-color-apply-on-region slime-output-start slime-output-end))))
 
 ;;;###autoload
 (defun unix-in-slime ()
@@ -89,11 +92,6 @@
     (:after () unix-in-slime)
   (let ((dir (slime-eval '(uiop:native-namestring cl:*default-pathname-defaults*))))
     (setq-local default-directory dir)))
-
-(defun unix-in-slime-filename-completion ()
-  (comint-filename-completion))
-
-(add-to-list 'slime-completion-at-point-functions 'unix-in-slime-filename-completion)
 
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here
