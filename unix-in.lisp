@@ -579,8 +579,8 @@ and will be closed after child process creation.")
   (:method ((object t)))
   (:documentation "Display OBJECT more \"thoroughly\" than `print'.
 Intended to be used at the REPL top-level to display the primary value
-of evualtion results.  See the methods for how we treat different
-types of objects."))
+of evualtion results. Return T if we did any thing.  See the methods
+for how we treat different types of objects."))
 
 (defmethod repl-connect ((p process-mixin))
   "Connect `*standard-input*' and `*standard-output*' to P's input/output."
