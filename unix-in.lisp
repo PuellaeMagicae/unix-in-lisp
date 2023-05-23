@@ -678,7 +678,7 @@ for how we treat different types of objects."))
   (:documentation "Like `princ-to-string', but error when OBJECT is not \"literal\".
 Use this when interfacing with Unix -- any complex S-expr
 representation is unlikely to be recognized by Unix tools.")
-  (:method ((symbol symbol))  (prin1-to-string symbol))
+  (:method ((symbol symbol))  (princ-to-string symbol))
   (:method ((seq sequence))
     "Zero element -> empty string.
 One element -> that element.
@@ -874,51 +874,32 @@ Currently, this is intended to be used for *both* /path syntax and
 
 ;;; Top-level lexification
 
-(defun compute-lexifications (body)
-  "Return an ALIST that map symbols that designates relative paths to the
-corresponding mounted symbols. This scans BODY to discover any symbol
-that correspond to Unix file, but is not canonical.
-
-The returned alist is intended for establishing MACROLET and
-SYMBOL-MACROLET bindings to redirect accesses to the mounted symbol,
-inspired by the Common Lisp implementation of locale/lexical
-environment (Gat, E. Locales: First-Class Lexical Environments for
-Common Lisp)."
-  (let ((map (make-hash-table)))
-    (serapeum:walk-tree
-     (lambda (form)
-       (when (and (symbolp form) (symbol-home-p form))
-         (ensure (gethash form map)
-           (let ((path (ensure-path form t)))
-             (if (ppath:lexists path)
-                 (mount-file path)
-                 form)))))
-     body)
-    (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
-               (alexandria:hash-table-alist map))))
-
-(defmacro with-relative-symbols (() &body body)
-  (let ((lex (compute-lexifications body)))
-    `(symbol-macrolet
-         ,(iter (for (from . to) in lex)
-            (collect `(,from ,to)))
-       (macrolet
-           ,(iter (for (from . to) in lex)
-              ;; Don't shadow existing function bindings
-              (unless (fboundp from)
-                (collect `(,from (&rest args) `(,',to ,@args)))))
-         ,@body))))
+(defun intern-hook (orig &rest args)
+  "If we see symbol corresponding to a existing file,
+create a new uninterned symbol that merge bindings from the file
+symbol and the actual symbol."
+  (multiple-value-bind (symbol status) (apply orig args)
+    (if (and (eq (named-readtables:readtable-name *readtable*)
+                 'unix-in-lisp)
+             (symbol-home-p symbol))
+        (let ((path (ensure-path symbol t)))
+          (if (ppath:lexists path)
+              (bind ((file-symbol (mount-file path))
+                     (new-symbol (make-symbol (symbol-name symbol))))
+                (when (not (sb-cltl2:variable-information 'x))
+                  (ensure-symbol-macro new-symbol file-symbol))
+                (when (and (not (fboundp symbol)) (fboundp file-symbol))
+                  (setf (macro-function new-symbol)
+                        (macro-function file-symbol)))
+                (values new-symbol :internal))
+              (values symbol status)))
+        (values symbol status))))
 
 (defmacro toplevel (&body body)
   "Evaluate BODY, but with ergonomics improvements for using as a shell.
-1. Use `with-relative-symbols' to support relative symbol accesses.
-Like in Unix, never shadow an existing function binding to avoid easy
-arbitrary code execution.
-2. Use `repl-connect' to give returned primary value special
+1. Use `repl-connect' to give returned primary value special
 treatment if possible."
-  `(let ((result
-           (multiple-value-list
-            (with-relative-symbols () ,@body))))
+  `(let ((result (multiple-value-list (progn ,@body))))
      (when (repl-connect (car result))
        (pop result))
      (multiple-value-prog1 (values-list result)
@@ -979,6 +960,8 @@ symbol bindings."
     (restart-case (error 'already-installed)
       (continue () :report "Uninstall first, then reinstall." (uninstall))
       (reckless-continue () :report "Install on top of it.")))
+  (sb-ext:without-package-locks
+    (cl-advice:add-advice :around 'sb-impl::%intern 'intern-hook))
   (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
     ;;  Create UNIX-IN-LISP.PATH from $PATH
     (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
@@ -1035,6 +1018,8 @@ symbol bindings."
   ;; Delete UNIX-IN-LISP.PATH
   (when (find-package :unix-in-lisp.path)
     (delete-package :unix-in-lisp.path))
+  (sb-ext:without-package-locks
+    (cl-advice:remove-advice :around 'sb-impl::%intern 'intern-hook))
   (values))
 
 (defun setup ()
