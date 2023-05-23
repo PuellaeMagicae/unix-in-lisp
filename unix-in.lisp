@@ -678,7 +678,12 @@ for how we treat different types of objects."))
   (:documentation "Like `princ-to-string', but error when OBJECT is not \"literal\".
 Use this when interfacing with Unix -- any complex S-expr
 representation is unlikely to be recognized by Unix tools.")
-  (:method ((symbol symbol))  (princ-to-string symbol))
+  (:method ((symbol symbol))
+    "Don't print #: for uninterned symbol, because `intern-hook' creates
+such symbols."
+    (if (symbol-package symbol)
+        (prin1-to-string symbol)
+        (princ-to-string symbol)))
   (:method ((seq sequence))
     "Zero element -> empty string.
 One element -> that element.
@@ -823,11 +828,10 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
            (unread char)
            (standard-read))))))
 
-(defun slash-read-macro (stream char)
+(defun tilde-read-macro (stream char)
   "If we're reading a symbol whose name is an *existing* Unix filename,
 return the corresponding mounted symbol.  Otherwise return the original symbol.
-Currently, this is intended to be used for *both* /path syntax and
-~user/path syntax."
+Currently, this is intended to be used for ~user/path syntax."
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (if (symbol-home-p symbol)
@@ -836,7 +840,7 @@ Currently, this is intended to be used for *both* /path syntax and
               (progn
                 ;; avoid polluting package
                 (unintern symbol)
-                (mount-file (symbol-name symbol)))
+                (mount-file path))
               symbol))
         symbol)))
 
@@ -856,8 +860,7 @@ Currently, this is intended to be used for *both* /path syntax and
 (named-readtables:defreadtable unix-in-lisp
   (:merge :standard)
   (:macro-char #\. 'dot-read-macro t)
-  (:macro-char #\/ 'slash-read-macro t)
-  (:macro-char #\~ 'slash-read-macro t)
+  (:macro-char #\~ 'tilde-read-macro t)
   (:macro-char #\$ 'dollar-read-macro t)
 
   (:case :invert))
