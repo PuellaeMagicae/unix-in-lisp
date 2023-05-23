@@ -132,7 +132,7 @@ is called the first time???"
   (if (unix-in-slime-p)
       (let ((*package* (find-package :unix-user))
             (*default-pathname-defaults*
-              (pathname-utils:force-directory (ensure-path "~"))))
+              (uiop:parse-native-namestring (to-dir (ensure-path "~/")))))
         (apply orig args))
       (apply orig args)))
 

@@ -182,7 +182,7 @@ Return the symbol."
 
 (defun access-file (path)
   (if (uiop:directory-exists-p (uiop:parse-native-namestring path))
-      (mount-directory (pathname-utils:force-directory path))
+      (mount-directory path)
       (uiop:read-file-lines (uiop:parse-native-namestring path))))
 
 (defun (setf access-file) (new-value path)
@@ -794,9 +794,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 ;;; Built-in commands
 
 (defmacro cd (&optional (path "~"))
-  `(bind ((%path (pathname-utils:force-directory
-                  (ensure-path ,(list 'fare-quasiquote:quasiquote path) t))))
-     (setq *default-pathname-defaults* %path)))
+  `(bind ((%path (to-dir (ensure-path ,(list 'fare-quasiquote:quasiquote path) t))))
+     (setq *default-pathname-defaults* (uiop:parse-native-namestring %path))))
 
 ;;; Reader syntax hacks
 
@@ -969,7 +968,7 @@ symbol bindings."
     ;;  Create UNIX-IN-LISP.PATH from $PATH
     (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
                       (handler-case
-                          (collect (mount-directory (pathname-utils:force-directory path)))
+                          (collect (mount-directory path))
                         (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
       (uiop:ensure-package :unix-in-lisp.path :mix packages :reexport packages))
     ;; Populate UNIX-IN-LISP.COMMON
