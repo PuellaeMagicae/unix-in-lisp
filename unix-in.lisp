@@ -6,7 +6,8 @@
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
                 #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
-           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
+           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix
+           #:with-relative-symbols))
 
 (uiop:define-package :unix-in-lisp.common)
 (uiop:define-package :unix-user
