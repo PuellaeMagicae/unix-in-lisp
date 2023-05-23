@@ -464,7 +464,7 @@ to avoid race condition.")
 
 (defmethod initialize-instance
     ((p lisp-process) &key (function :function)
-                        (input :stream) (output :stream) (error *standard-output*))
+                        (input :stream) (output :stream) (error *trace-output*))
   (flet ((pipe ()
            (bind (((:values read-fd write-fd) (osicat-posix:pipe)))
              (values (sb-sys:make-fd-stream read-fd :input t :auto-close t)
@@ -709,7 +709,8 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
           (setq args (cdr args))))
     (finally (return (values plist rest)))))
 
-(defun execute-command (command args &key (input :stream) (output :stream) (error *standard-output*))
+(defun execute-command (command args
+                        &key (input :stream) (output :stream) (error *trace-output*))
   (let ((path (ensure-path command))
         (args (map 'list #'literal-to-string args))
         input-1 output-1 error-1)
