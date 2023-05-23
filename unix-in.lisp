@@ -895,29 +895,32 @@ Common Lisp)."
     (remove-if (lambda (pair) (eq (car pair) (cdr pair)))
                (alexandria:hash-table-alist map))))
 
+(defmacro with-relative-symbols (() &body body)
+  (let ((lex (compute-lexifications body)))
+    `(symbol-macrolet
+         ,(iter (for (from . to) in lex)
+            (collect `(,from ,to)))
+       (macrolet
+           ,(iter (for (from . to) in lex)
+              ;; Don't shadow existing function bindings
+              (unless (fboundp from)
+                (collect `(,from (&rest args) `(,',to ,@args)))))
+         ,@body))))
+
 (defmacro toplevel (&body body)
   "Evaluate BODY, but with ergonomics improvements for using as a shell.
-1. Use `compute-lexifications' to support relative symbol accesses.
+1. Use `with-relative-symbols' to support relative symbol accesses.
 Like in Unix, never shadow an existing function binding to avoid easy
 arbitrary code execution.
 2. Use `repl-connect' to give returned primary value special
 treatment if possible."
-  (let ((lex (compute-lexifications body)))
-    `(let ((result
-             (multiple-value-list
-              (symbol-macrolet
-                  ,(iter (for (from . to) in lex)
-                     (collect `(,from ,to)))
-                (macrolet
-                    ,(iter (for (from . to) in lex)
-                       ;; Don't shadow existing function bindings
-                       (unless (fboundp from)
-                         (collect `(,from (&rest args) `(,',to ,@args)))))
-                  ,@body)))))
-       (when (repl-connect (car result))
-         (pop result))
-       (multiple-value-prog1 (values-list result)
-         (nhooks:run-hook *post-command-hook*)))))
+  `(let ((result
+           (multiple-value-list
+            (with-relative-symbols () ,@body))))
+     (when (repl-connect (car result))
+       (pop result))
+     (multiple-value-prog1 (values-list result)
+       (nhooks:run-hook *post-command-hook*))))
 
 ;;; Environment variables
 
