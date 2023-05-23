@@ -68,19 +68,12 @@ In the above example, if ~iota.txt~ does not exist and I use ~setq~ instead of ~
 ** Command and Process Mapping
 Unix in Lisp manages jobs in the unit of /Effective processes/. Theses include regular Unix processes represented by ~simple-process~, and ~pipeline~'s which are consisted of any number of UNIX processes and Lisp function stages.
 *** Simple commands
-When Unix in Lisp maps a directory, files are checked for execution permission and executable ones are mapped as Common Lisp macros.  These macros /implicitly quasiquotes/ their arguments. The arguments are converted to strings using ~to-argument~, then passed to the corresponding executable.
+When Unix in Lisp maps a directory, files are checked for execution permission and executable ones are mapped as Common Lisp macros.  These macros /implicitly quasiquotes/ their arguments. The arguments are converted to strings using ~literal-to-string~, then passed to the corresponding executable.
 
 Examples of using macros mapped from Unix commands
 #+begin_src
   /Users/kchan/some-documents> (cat ,@(ls))
   ;; This cats together all files under current directory.
-#+end_src
-
-When ~to-argument~ sees a list, it converts its elements recursively and then concatenate them together. Hopefully it makes (manually or programmatically) writing structured command arguments easier
-
-#+begin_src
-  /Users/kchan/some-repo> (configure (--prefix= ,*my-prefered-prefix*))
-  ;; Similar to posix shell: configure --prefix=$MY-PREFERED-PREFIX
 #+end_src
 
 You can also set up redirections (and maybe other process creation settings in the future) via supplying keyword arguments. These arguments /are not/ implicitly quasiquoted and /are/ evaluated.

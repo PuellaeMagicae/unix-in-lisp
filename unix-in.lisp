@@ -232,7 +232,10 @@ Code should then use the returned symbol in place of SYMBOL."
 (defvar *fd-watcher-event-base* nil)
 
 (defun fd-watcher ()
-  (loop (iolib:event-dispatch *fd-watcher-event-base*)))
+  (loop
+    (restart-case
+        (iolib:event-dispatch *fd-watcher-event-base*)
+      (abort () :report "Abort processing current FD event."))))
 
 (defun ensure-fd-watcher ()
   "Setup `*fd-watcher-thread*' and `*fd-watcher-event-base*'.
@@ -532,19 +535,22 @@ and will be closed after child process creation.")
               (iolib:remove-fd-handlers *fd-watcher-event-base* write-fd)
               (isys:close write-fd))
              ((:labels write-elements ())
-              (handler-case
-                  (iter
-                    (when (funcall endp)
-                      (return-from write-elements (clean-up)))
-                    (cffi:with-foreign-string
-                        ((buf size)
-                         (princ-to-string (funcall element)))
-                      ;; Replace NUL with Newline
-                      (setf (cffi:mem-ref buf :char (1- size)) 10)
-                      (osicat-posix:write write-fd buf size))
-                    (funcall next))
-                (osicat-posix:ewouldblock ())
-                (error (c) (describe c) (clean-up)))))
+              (let (more)
+                (unwind-protect
+                     (handler-case
+                         (iter
+                           (when (funcall endp)
+                             (return-from write-elements nil))
+                           (cffi:with-foreign-string
+                               ((buf size)
+                                (literal-to-string (funcall element)))
+                             ;; Replace NUL with Newline
+                             (setf (cffi:mem-ref buf :char (1- size)) 10)
+                             (osicat-posix:write write-fd buf size))
+                           (funcall next))
+                       (osicat-posix:ewouldblock ()
+                         (setf more t)))
+                  (unless more (clean-up))))))
         (setf (isys:fd-nonblock-p write-fd) t)
         (ensure-fd-watcher)
         (iolib:set-io-handler
@@ -667,19 +673,25 @@ for how we treat different types of objects."))
 
 ;;; Command syntax
 
-(defgeneric to-argument (object)
-  (:documentation "Convert Lisp OBJECT to Unix command argument.")
-  (:method (object) (princ-to-string object))
+(defgeneric literal-to-string (object)
+  (:documentation "Like `princ-to-string', but error when OBJECT is not \"literal\".
+Use this when interfacing with Unix -- any complex S-expr
+representation is unlikely to be recognized by Unix tools.")
   (:method ((symbol symbol))  (prin1-to-string symbol))
-  (:method ((seq native-lazy-seq:lazy-seq))
-    (to-argument (coerce seq 'list)))
-  (:method ((list list))
-    "Elements of LIST are concatenated together.
-This implies: 1. if a command output a single line, its result can be
-used in arguments like POSIX shell command substitution.
-2. One can split components of arguments to a list, e.g.
-writing (--key= ,value)."
-    (mapconcat #'to-argument list "")))
+  (:method ((seq sequence))
+    "Zero element -> empty string.
+One element -> that element.
+More -> error."
+    (native-lazy-seq:with-iterators (element next endp) seq
+      (if (funcall endp)
+          ""
+          (let ((head (funcall element)))
+            (funcall next)
+            (if (funcall endp)
+                head
+                (error "More than 1 element in ~S." seq))))))
+  (:method ((s string)) s)
+  (:method ((n number)) (princ-to-string n)))
 
 (defun split-args (args)
   "Split ARGS into keyword argument plist and other arguments.
@@ -699,7 +711,7 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 
 (defun execute-command (command args &key (input :stream) (output :stream) (error *standard-output*))
   (let ((path (ensure-path command))
-        (args (map 'list #'to-argument args))
+        (args (map 'list #'literal-to-string args))
         input-1 output-1 error-1)
     (flet ((close-maybe (s)
              (when (streamp s)
@@ -935,14 +947,14 @@ The result is a list of strings with the form \"VAR=VALUE\", as in
 environ(7)."
   (iter (for (symbol . name) in *env-vars*)
     (when (boundp symbol)
-      (collect (concat name "=" (princ-to-string (symbol-value symbol)))))))
+      (collect (concat name "=" (literal-to-string (symbol-value symbol)))))))
 
 (defun synchronize-env-to-unix ()
   "Update the Unix environment of the Lisp image to reflect current Lisp
 symbol bindings."
   (iter (for (symbol . name) in *env-vars*)
     (if (boundp symbol)
-        (setf (uiop:getenv name) (princ-to-string (symbol-value symbol)))
+        (setf (uiop:getenv name) (literal-to-string (symbol-value symbol)))
         (sb-posix:unsetenv name))))
 
 (nhooks:add-hook *post-command-hook* 'synchronize-env-to-unix)
