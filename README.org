@@ -20,7 +20,7 @@ The tight integration with the Lisp language makes it possible to leverage exist
   - [[#package-system-structure][Package system structure]]
 
 * Quick Start
-Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. You may also need to clone [[https://github.com/kchanqvq/native-lazy-seq]] into =~/quicklisp/local-projects/=. Before first-time use, run ~(ql:quickload "unix-in-lisp")~ to ensure all dependencies are installed. It's also advised to run ~(ql:update-dist "quicklisp")~ first, because Unix in Lisp might rely on some bug fixes I submitted to upstream packages during its development.
+Currently, only SBCL is supported. Clone this repository into your =~/quicklisp/local-projects/=. Unix in Lisp is currently at /alpha/ stage and will receive frequent changes. It's recommended to use Ultralisp to install dependencies, to make sure various bug fixes to the upstream are available which Unix in Lisp relies on. If you haven't done so, ~(ql-dist:install-dist "http://dist.ultralisp.org/" :prompt nil)~. Before first-time use, run ~(ql:update-dist "ultralisp")~ and ~(ql:quickload "unix-in-lisp")~ to install all dependencies. It's also advised to ~(ql:update-dist "ultralisp")~ and ~git pull~ this repo regularly to get updates and bug fixes.
 
 It's recommended to load ~unix-in-slime.el~ for better SLIME integration. To load it, evaluate ~(require 'unix-in-slime "~/quicklisp/local-projects/unix-in-lisp/unix-in-slime")~ in emacs. You may want to add this line to your ~init.el~.
 

@@ -46,7 +46,7 @@
 (defvar unix-in-slime-port nil)
 
 (define-advice slime-repl-emit
-    (:after (string) unix-in-slime)
+    (:after (_string) unix-in-slime)
   "Add ANSI colors and escape sequence to the SLIME REPL."
   (when (unix-in-slime-p)
     (with-current-buffer (slime-output-buffer)
