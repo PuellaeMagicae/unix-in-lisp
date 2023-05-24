@@ -957,6 +957,15 @@ symbol bindings."
             (subseq s 0 (position #\= s)))
           (sb-ext:posix-environ)))
 
+(defun ensure-path-package ()
+  (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
+                    (handler-case
+                        (collect (mount-directory path))
+                      (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
+    (uiop:ensure-package :unix-in-lisp.path :mix packages :reexport packages)))
+
+(nhooks:add-hook *post-command-hook* 'ensure-path-package)
+
 (defun install ()
   (when (find-package "UNIX-IN-LISP.PATH")
     (restart-case (error 'already-installed)
@@ -965,12 +974,7 @@ symbol bindings."
   (sb-ext:without-package-locks
     (cl-advice:add-advice :around 'sb-impl::%intern 'intern-hook))
   (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
-    ;;  Create UNIX-IN-LISP.PATH from $PATH
-    (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
-                      (handler-case
-                          (collect (mount-directory path))
-                        (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
-      (uiop:ensure-package :unix-in-lisp.path :mix packages :reexport packages))
+    (ensure-path-package)
     ;; Populate UNIX-IN-LISP.COMMON
     (uiop:ensure-package :unix-in-lisp.common
                          :mix '(:unix-in-lisp.path)
