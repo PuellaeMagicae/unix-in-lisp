@@ -1,5 +1,5 @@
 (uiop:define-package :unix-in-lisp
-  (:use :cl :iter)
+  (:use :cl :iter :named-closure)
   (:import-from :metabang-bind #:bind)
   (:import-from :serapeum #:lastcar :package-exports #:-> #:mapconcat
                 #:concat #:string-prefix-p #:synchronized #:ensure)
@@ -47,7 +47,7 @@ for `package-name's and `symbol-name's."
             ;; This warning is too noisy
             #+nil (warn "Probably broken symlink: ~a" filename)
             nil))
-        (setf (macro-function symbol) #'command-macro)
+        (setf (macro-function symbol) (make-command-macro symbol))
         (fmakunbound symbol)))
   symbol)
 
@@ -284,13 +284,16 @@ mechanisms."
          (connection swank::*emacs-connection*)
          ((:labels read-data ())
           (swank::with-connection (connection)
-            (handler-case
-                (iter (for c = (read-char-no-hang read-stream))
-                  (while c)
-                  (write-char c stream)
-                  (finally (force-output stream)))
-              (end-of-file () (clean-up))
-              (error (c) (describe c) (clean-up))))))
+            (let (more)
+              (unwind-protect
+                   (handler-case
+                       (iter (for c = (read-char-no-hang read-stream))
+                         (while c)
+                         (write-char c stream)
+                         (finally (setf more t) (force-output stream)))
+                     (end-of-file ()))
+                (unless more
+                  (clean-up)))))))
     (setf (isys:fd-nonblock-p read-fd) t)
     (ensure-fd-watcher)
     (iolib:set-io-handler
@@ -649,26 +652,27 @@ for how we treat different types of objects."))
        (eq (read-char stream nil 'eof) #\!)))
 
 (defun fast-load-sbcl-shebang (path args &key input output error directory)
-  (let ((stream (open path :external-format :latin-1)))
-    (if (ignore-errors
-         (and (read-shebang stream)
-              (string= (read-line stream) "/usr/bin/env sbcl --script")))
-        (make-instance 'lisp-process
-                       :function
-                       (lambda ()
-                         (unwind-protect
-                              (uiop:with-current-directory (directory)
-                                (let ((*default-pathname-defaults* directory))
-                                  (with-standard-io-syntax
-                                    (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
-                                          (sb-ext:*posix-argv* (cons (uiop:native-namestring path) args)))
-                                      (load stream)))))
-                           (close stream)))
-                       :description (cdr (ppath:split path))
-                       :input input :output output :error error)
-        (progn
-          (close stream)
-          nil))))
+  (ignore-some-conditions (file-error)
+    (let ((stream (open path :external-format :latin-1)))
+      (if (ignore-errors
+           (and (read-shebang stream)
+                (string= (read-line stream) "/usr/bin/env sbcl --script")))
+          (make-instance 'lisp-process
+                         :function
+                         (lambda ()
+                           (unwind-protect
+                                (uiop:with-current-directory (directory)
+                                  (let ((*default-pathname-defaults* directory))
+                                    (with-standard-io-syntax
+                                      (let ((*print-readably* nil) ;; good approximation to SBCL initial reader settings
+                                            (sb-ext:*posix-argv* (cons (uiop:native-namestring path) args)))
+                                        (load stream)))))
+                             (close stream)))
+                         :description (cdr (ppath:split path))
+                         :input input :output output :error error)
+          (progn
+            (close stream)
+            nil)))))
 
 (nhooks:add-hook *fast-load-functions* 'fast-load-sbcl-shebang)
 
@@ -750,10 +754,11 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
             (close-maybe output-1)
             (close-maybe error-1))))))
 
-(defun command-macro (form env)
+(defnclo command-macro (command)
+    (form env)
   (declare (ignore env)
            (sb-c::lambda-list (&rest args)))
-  (bind (((command . args) form)
+  (bind (((_ . args) form)
          ((:values plist command-args) (split-args args)))
     ;; The following macrolet make ,@<some-sequence> work, just like
     ;; ,@<some-list>.  This is done so that users can write

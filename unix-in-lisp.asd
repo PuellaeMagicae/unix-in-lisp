@@ -4,6 +4,7 @@
                :ppath
                :fare-quasiquote-extras
                :named-readtables
+               :named-closure
                :cl-advice
                :nhooks
                :native-lazy-seq
