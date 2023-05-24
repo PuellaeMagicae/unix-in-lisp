@@ -2,7 +2,7 @@
 #+TITLE: Unix in Lisp - mount Unix into Common Lisp image
 Unix in Lisp is currently a usable Lisp (not POSIX!) shell for Unix. The distinctive feature of Unix in Lisp is that rather than creating a sub-language for Unix operations, Unix concepts are directly/shallowly embedded into Lisp (Unix commands become Lisp macros, Unix file become Lisp variables, Unix streams become lazy Lisp sequences, etc).
 
-The tight integration with the Lisp language makes it possible to leverage existing tools for Lisp. One instance is the Unix in SLIME listener, which inherits completion, interactive debugger and multiple listeners etc from SLIME itself. Another instance is that existing CL library such as sequence helper functions from ~serapeum~ works out of the box on Unix in Lisp process streams.
+The fact that Unix in Lisp /is/ Lisp, rather than an interpreter written in Lisp, makes it possible to leverage existing tools for Lisp. One instance is the Unix in SLIME listener, which inherits completion, interactive debugger and multiple listeners etc from SLIME itself. Another instance is that existing CL library such as sequence helper functions from ~serapeum~ works out of the box on Unix in Lisp process streams.
 * Table of Contents :TOC:
 - [[#quick-start][Quick Start]]
   - [[#examples][Examples]]
