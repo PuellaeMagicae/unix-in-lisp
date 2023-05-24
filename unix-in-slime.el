@@ -61,16 +61,21 @@ instance, and creates a swank server dedicated to Unix in Lisp
 listening on `unix-in-slime-default-port'."
   (interactive)
   (if (slime-connected-p)
-      (slime-eval-async
-          `(cl:progn
-            (asdf:require-system "unix-in-lisp")
-            (cl:funcall (cl:find-symbol "ENSURE-SWANK-SERVER" "UNIX-IN-LISP")
-                        ,unix-in-slime-default-port))
-        (lambda (port)
-          (setq unix-in-slime-port port)
-          ;; don't let `slime-connect' change default connection
-          (let ((slime-default-connection slime-default-connection))
-            (slime-connect "localhost" port))))
+      ;; If `slime-current-thread'=`:repl-thread', creation of Unix in
+      ;; SLIME listeners (the `slime-eval-async' call in particular)
+      ;; will be blocked by the current REPL evaluation request.
+      ;; Therefore we rebind it to `t'.
+      (let ((slime-current-thread t))
+        (slime-eval-async
+            `(cl:progn
+              (asdf:require-system "unix-in-lisp")
+              (cl:funcall (cl:find-symbol "ENSURE-SWANK-SERVER" "UNIX-IN-LISP")
+                          ,unix-in-slime-default-port))
+          (lambda (port)
+            (setq unix-in-slime-port port)
+            ;; don't let `slime-connect' change default connection
+            (let ((slime-default-connection slime-default-connection))
+              (slime-connect "localhost" port)))))
     (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
 (defun unix-in-slime-p ()
