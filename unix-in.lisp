@@ -815,13 +815,21 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 ;;;; Sequential execution
 
 (defmacro seq (&body forms)
-  `(progn
-     ,@ (mapcar (lambda (form)
-                  `(let ((%process ,form))
-                     (when (streamp %process)
-                         (close %process))
-                     %process))
-                forms)))
+  (bind (((:values plist forms) (split-args forms)))
+    `(make-instance 'lisp-process
+                    :function
+                    (lambda ()
+                      ,@ (mapcar (lambda (form)
+                                   `(repl-connect ,form))
+                                 forms))
+                    :description
+                    ,(serapeum:string-join
+                      (mapcar (lambda (form)
+                                (prin1-to-string
+                                 (if (listp form) (car form) form)))
+                              forms)
+                      ";")
+                    ,@plist)))
 
 ;;; Built-in commands
 
