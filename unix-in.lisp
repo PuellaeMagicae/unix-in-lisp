@@ -597,8 +597,6 @@ See the methods for how we treat different types of objects."))
 (defmethod repl-connect ((p process-mixin))
   "Connect `*standard-input*' and `*standard-output*' to P's input/output."
   (let ((repl-thread (bt:current-thread))
-        ;; We take input/output of the process exclusively
-        ;; TODO: proper mutex
         read-stream write-stream)
     (restart-case
         (unwind-protect
@@ -799,10 +797,10 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
            (setq ,%processes (nreverse ,%processes))
            (let (%input %output)
              ;; Take ownership of I/O streams of children, if any
-             (when (process-input (car ,%processes))
+             (when (typep (car ,%processes) 'process-mixin)
                (synchronized ((car ,%processes))
                  (rotatef (process-input (car ,%processes)) %input)))
-             (when (process-output (lastcar ,%processes))
+             (when (typep (lastcar ,%processes) 'process-mixin)
                (synchronized ((lastcar ,%processes))
                  (rotatef (process-output (lastcar ,%processes)) %output)))
              (make-instance 'pipeline
