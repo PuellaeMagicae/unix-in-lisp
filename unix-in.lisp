@@ -287,18 +287,12 @@ mechanisms."
           (swank::with-connection (connection)
             (let (more)
               (unwind-protect
-                   ;; This `ignore-errors' looks scary, doesn't it?
-                   ;; Conceptually we want to ignore `end-of-file' and
-                   ;; `stream-error' (when some party closes
-                   ;; `read-fd-or-stream'. However SBCL implementation
-                   ;; of `read-char-no-hang' may signal something as
-                   ;; uninformative as a `simple-error'. Thus the
-                   ;; current catch-all `ignore-errors'.
-                   (ignore-errors
-                    (iter (for c = (read-char-no-hang read-stream))
-                      (while c)
-                      (write-char c stream)
-                      (finally (setf more t) (force-output stream))))
+                   (handler-case
+                       (iter (for c = (read-char-no-hang read-stream))
+                         (while c)
+                         (write-char c stream)
+                         (finally (setf more t) (force-output stream)))
+                     (end-of-file ()))
                 (unless more
                   (clean-up)))))))
     (setf (isys:fd-nonblock-p read-fd) t)
@@ -526,14 +520,7 @@ to avoid race condition.")
      (thread p)
      (lambda ()
        (sb-thread:abort-thread))))
-  (prog1
-      (ignore-errors (bt:join-thread (thread p)))
-    ;; Let's be extra sure the streams are closed
-    (flet ((close-maybe (s)
-             (when (and (streamp s) (open-stream-p s))
-               (close s))))
-      (close-maybe (process-input p))
-      (close-maybe (process-output p)))))
+  (ignore-errors (bt:join-thread (thread p))))
 
 ;;;; Process I/O streams
 
