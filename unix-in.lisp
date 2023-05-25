@@ -439,12 +439,12 @@ to avoid race condition.")
           (nhooks:remove-hook (status-change-hook child) 'remove-from-jobs)
           (deletef *jobs* child)
           (nhooks:add-hook
-           (status-change-hook child)
-           (make-instance
-            'nhooks:handler
-            :fn (lambda ()
-                  (nhooks:run-hook (status-change-hook p)))
-            :name 'notify-parent)))
+              (status-change-hook child)
+              (make-instance
+               'nhooks:handler
+               :fn (lambda ()
+                     (nhooks:run-hook (status-change-hook p)))
+               :name 'notify-parent)))
         (processes p)))
 
 (defmethod process-status ((p pipeline))
@@ -529,6 +529,7 @@ and will be closed after child process creation.")
         ;; The consumer takes the output stream exclusively
         (setf (process-output p) nil))))
   (:method ((s sb-sys:fd-stream)) s)
+  (:method ((object t)) (read-fd-stream (literal-to-string object)))
   (:method ((s string))
     "Don't turn a STRING into lines of single characters."
     (read-fd-stream (list s)))
@@ -780,22 +781,35 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
   (and (symbolp form) (string= (symbol-name form) "_")))
 
 (defmacro pipe (&rest forms)
-  `(let (%processes)
-     (push ,(car forms) %processes)
-     ,@ (mapcar (lambda (form)
-                  (if-let ((placeholder (and (listp form) (find-if #'placeholder-p form))))
-                    `(push ,(substitute '(car %processes) placeholder form)
-                           %processes)
-                    `(push (,@form :input (car %processes))
-                           %processes)))
-                (cdr forms))
-     (setq %processes (nreverse %processes))
-     (make-instance 'pipeline
-                    :processes (remove-if-not
-                                (lambda (p) (typep p 'process-mixin))
-                                %processes)
-                    :process-input (process-input (car %processes))
-                    :process-output (process-output (lastcar %processes)))))
+  (bind (((:values plist forms) (split-args forms))
+         ((:flet inject-argument (form needle))
+          (if-let ((placeholder (and (listp form) (find-if #'placeholder-p form))))
+            (substitute needle placeholder form)
+            `(,@form :input ,needle))))
+    (alexandria:with-gensyms (%processes)
+      (destructuring-bind (&key input) plist
+        `(let (,%processes)
+           (push ,(if input
+                      (inject-argument (car forms) input)
+                      (car forms))
+                 ,%processes)
+           ,@ (mapcar (lambda (form)
+                        `(push ,(inject-argument form `(car ,%processes)) ,%processes))
+                      (cdr forms))
+           (setq ,%processes (nreverse ,%processes))
+           (let (%input %output)
+             ;; Take ownership of I/O streams of children, if any
+             (when (process-input (car ,%processes))
+               (synchronized ((car ,%processes))
+                 (rotatef (process-input (car ,%processes)) %input)))
+             (when (process-output (lastcar ,%processes))
+               (synchronized ((lastcar ,%processes))
+                 (rotatef (process-output (lastcar ,%processes)) %output)))
+             (make-instance 'pipeline
+                            :processes (remove-if-not
+                                        (lambda (p) (typep p 'process-mixin))
+                                        ,%processes)
+                            :process-input %input :process-output %output)))))))
 
 ;;; Built-in commands
 
