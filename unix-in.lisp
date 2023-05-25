@@ -899,6 +899,13 @@ symbol and the actual symbol."
                 (when (and (not (fboundp symbol)) (fboundp file-symbol))
                   (setf (macro-function new-symbol)
                         (macro-function file-symbol)))
+                ;; If the symbol seem to be newly interned, unintern
+                ;; it to avoid polluting *package* (usually UNIX-USER)
+                ;; with too many symbols
+                ;; TODO: make the detection more robust
+                (when (and (not (sb-cltl2:variable-information 'x))
+                           (not (fboundp symbol)))
+                  (unintern symbol))
                 (values new-symbol :internal))
               (values symbol status)))
         (values symbol status))))
