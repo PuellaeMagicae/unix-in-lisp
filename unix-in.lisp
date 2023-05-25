@@ -491,21 +491,20 @@ to avoid race condition.")
             (bt:make-thread
              (lambda ()
                (unwind-protect
-                    (funcall function)
-                 (mapc
-                  (lambda (p)
-                    (close p))
-                  *jobs*)
-                 (close stdin)
-                 (close stdout)
+                    (let (*jobs*
+                          (*standard-input* stdin)
+                          (*standard-output* stdout)
+                          (*trace-output* error))
+                      (unwind-protect
+                           (funcall function)
+                        (mapc
+                         (lambda (p)
+                           (close p))
+                         *jobs*)
+                        (close stdin)
+                        (close stdout)))
                  (setf (slot-value p 'status) :exited)
-                 (nhooks:run-hook (status-change-hook p))))
-             :initial-bindings
-             `((*standard-input* . ,stdin)
-               (*standard-output* . ,stdout)
-               (*trace-output* . ,error)
-               (*jobs*)
-               ,@bt:*default-special-bindings*)))))
+                 (nhooks:run-hook (status-change-hook p))))))))
   (call-next-method))
 
 (defmethod process-wait ((p lisp-process))
