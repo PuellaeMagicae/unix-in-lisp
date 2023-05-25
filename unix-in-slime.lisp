@@ -77,18 +77,14 @@
 
 (defun swank-eval-region-hook (orig string)
   "Wrap forms to be evaluated with `toplevel' macro."
-  (if (unix-in-slime-p)
-      (with-input-from-string (stream string)
-        (let (- values)
-          (loop
-            (let ((form (read stream nil stream)))
-              (when (eq form stream)
-                (finish-output)
-                (return (values values -)))
-              (setq - form)
-              (setq values (multiple-value-list (eval `(toplevel ,form))))
-              (finish-output)))))
-      (funcall orig string)))
+  (bind (((:values values -) (funcall orig string)))
+    (if (unix-in-slime-p)
+        (progn
+          (nhooks:run-hook *post-command-hook*)
+          (if (repl-connect (car values))
+              (values (cdr values) -)
+              (values values -)))
+        (values values -))))
 
 (defun swank-track-package-hook (orig fun)
   "Always update prompt instead only when *PACKAGE* change,

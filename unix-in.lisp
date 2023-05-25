@@ -589,8 +589,9 @@ and will be closed after child process creation.")
   (:method ((object t)))
   (:documentation "Display OBJECT more \"thoroughly\" than `print'.
 Intended to be used at the REPL top-level to display the primary value
-of evualtion results. Return T if we did any thing.  See the methods
-for how we treat different types of objects."))
+of evualtion results. Return T if we did display OBJECT specially, NIL
+if we did nothing and caller should probably display OBJECT itself.
+See the methods for how we treat different types of objects."))
 
 (defmethod repl-connect ((p process-mixin))
   "Connect `*standard-input*' and `*standard-output*' to P's input/output."
@@ -879,7 +880,7 @@ Currently, this is intended to be used for ~user/path syntax."
         (funcall orig thunk))
       (funcall orig thunk)))
 
-;;; Top-level lexification
+;;;; Relative symbol
 
 (defun intern-hook (orig &rest args)
   "If we see symbol corresponding to a existing file,
@@ -901,16 +902,6 @@ symbol and the actual symbol."
                 (values new-symbol :internal))
               (values symbol status)))
         (values symbol status))))
-
-(defmacro toplevel (&body body)
-  "Evaluate BODY, but with ergonomics improvements for using as a shell.
-1. Use `repl-connect' to give returned primary value special
-treatment if possible."
-  `(let ((result (multiple-value-list (progn ,@body))))
-     (when (repl-connect (car result))
-       (pop result))
-     (multiple-value-prog1 (values-list result)
-       (nhooks:run-hook *post-command-hook*))))
 
 ;;; Environment variables
 
