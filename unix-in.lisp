@@ -5,7 +5,8 @@
                 #:concat #:string-prefix-p #:synchronized #:ensure)
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
                 #:assoc-value)
-  (:export #:cd #:install #:uninstall #:setup #:ensure-path #:contents #:defile #:pipe
+  (:export #:cd #:install #:uninstall #:setup #:ensure-path
+           #:defile #:pipe #:seq
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix
            #:with-relative-symbols))
 
@@ -678,6 +679,7 @@ See the methods for how we treat different types of objects."))
 
 ;;; Command syntax
 
+;;;; Command maccros
 (defgeneric literal-to-string (object)
   (:documentation "Like `princ-to-string', but error when OBJECT is not \"literal\".
 Use this when interfacing with Unix -- any complex S-expr
@@ -775,10 +777,11 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
         ,(list 'fare-quasiquote:quasiquote command-args)
         ,@plist))))
 
+;;;; Pipeline Syntax
 (defun placeholder-p (form)
   (and (symbolp form) (string= (symbol-name form) "_")))
 
-(defmacro pipe (&rest forms)
+(defmacro pipe (&body forms)
   (bind (((:values plist forms) (split-args forms))
          ((:flet inject-argument (form needle))
           (if-let ((placeholder (and (listp form) (find-if #'placeholder-p form))))
@@ -808,6 +811,17 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
                                         (lambda (p) (typep p 'process-mixin))
                                         ,%processes)
                             :process-input %input :process-output %output)))))))
+
+;;;; Sequential execution
+
+(defmacro seq (&body forms)
+  `(progn
+     ,@ (mapcar (lambda (form)
+                  `(let ((%process ,form))
+                     (when (streamp %process)
+                         (close %process))
+                     %process))
+                forms)))
 
 ;;; Built-in commands
 
