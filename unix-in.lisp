@@ -480,7 +480,7 @@ to avoid race condition.")
                 (pipe)
                 (values (read-fd-stream input) nil)))
       (setf (values (slot-value p 'output) stdout)
-            (if (eq input :stream)
+            (if (eq output :stream)
                 (pipe)
                 (values nil (write-fd-stream output))))
       (when (eq error :output)
@@ -492,6 +492,10 @@ to avoid race condition.")
              (lambda ()
                (unwind-protect
                     (funcall function)
+                 (mapc
+                  (lambda (p)
+                    (close p))
+                  *jobs*)
                  (close stdin)
                  (close stdout)
                  (setf (slot-value p 'status) :exited)
@@ -500,6 +504,7 @@ to avoid race condition.")
              `((*standard-input* . ,stdin)
                (*standard-output* . ,stdout)
                (*trace-output* . ,error)
+               (*jobs*)
                ,@bt:*default-special-bindings*)))))
   (call-next-method))
 
@@ -610,10 +615,11 @@ See the methods for how we treat different types of objects."))
                   read-stream
                   *standard-output*
                   (lambda ()
-                    (bt:interrupt-thread
-                     repl-thread
-                     (lambda ()
-                       (ignore-errors (throw 'finish nil)))))))
+                    (ignore-some-conditions (sb-thread:interrupt-thread-error)
+                      (bt:interrupt-thread
+                       repl-thread
+                       (lambda ()
+                         (ignore-errors (throw 'finish nil))))))))
                (cond (write-stream
                       (loop
                         (handler-case
@@ -815,12 +821,18 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 ;;;; Sequential execution
 
 (defmacro seq (&body forms)
+  "Return a process that execute FORMS sequentially.
+If any of FORM evaluate to an effective process, redirect its
+input/output to the returned process and wait for its completion."
   (bind (((:values plist forms) (split-args forms)))
     `(make-instance 'lisp-process
                     :function
                     (lambda ()
                       ,@ (mapcar (lambda (form)
-                                   `(repl-connect ,form))
+                                   `(let ((%process ,form))
+                                      (repl-connect %process)
+                                      (when (streamp %process)
+                                        (close %process))))
                                  forms))
                     :description
                     ,(serapeum:string-join
