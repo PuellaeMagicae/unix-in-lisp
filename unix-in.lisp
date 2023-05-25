@@ -287,12 +287,18 @@ mechanisms."
           (swank::with-connection (connection)
             (let (more)
               (unwind-protect
-                   (handler-case
-                       (iter (for c = (read-char-no-hang read-stream))
-                         (while c)
-                         (write-char c stream)
-                         (finally (setf more t) (force-output stream)))
-                     (end-of-file ()))
+                   ;; This `ignore-errors' looks scary, doesn't it?
+                   ;; Conceptually we want to ignore `end-of-file' and
+                   ;; `stream-error' (when some party closes
+                   ;; `read-fd-or-stream'. However SBCL implementation
+                   ;; of `read-char-no-hang' may signal something as
+                   ;; uninformative as a `simple-error'. Thus the
+                   ;; current catch-all `ignore-errors'.
+                   (ignore-errors
+                    (iter (for c = (read-char-no-hang read-stream))
+                      (while c)
+                      (write-char c stream)
+                      (finally (setf more t) (force-output stream))))
                 (unless more
                   (clean-up)))))))
     (setf (isys:fd-nonblock-p read-fd) t)
@@ -490,21 +496,25 @@ to avoid race condition.")
             (slot-value p 'thread)
             (bt:make-thread
              (lambda ()
-               (unwind-protect
-                    (let (*jobs*
-                          (*standard-input* stdin)
-                          (*standard-output* stdout)
-                          (*trace-output* error))
-                      (unwind-protect
-                           (funcall function)
-                        (mapc
-                         (lambda (p)
-                           (close p))
-                         *jobs*)
-                        (close stdin)
-                        (close stdout)))
-                 (setf (slot-value p 'status) :exited)
-                 (nhooks:run-hook (status-change-hook p))))))))
+               ;; Asynchronous-safe `unwind-protect', according to
+               ;; sbcl src/code/target-thread.lisp recommendation
+               (sb-sys:without-interrupts
+                 (unwind-protect
+                      (let (*jobs*
+                            (*standard-input* stdin)
+                            (*standard-output* stdout)
+                            (*trace-output* error))
+                        (unwind-protect
+                             (sb-sys:with-local-interrupts
+                               (funcall function))
+                          (mapc
+                           (lambda (p)
+                             (close p))
+                           *jobs*)
+                          (close stdin)
+                          (close stdout)))
+                   (setf (slot-value p 'status) :exited)
+                   (nhooks:run-hook (status-change-hook p)))))))))
   (call-next-method))
 
 (defmethod process-wait ((p lisp-process))
@@ -516,9 +526,14 @@ to avoid race condition.")
      (thread p)
      (lambda ()
        (sb-thread:abort-thread))))
-  (ignore-errors (close (process-input p)))
-  (ignore-errors (close (process-output p)))
-  (ignore-errors (bt:join-thread (thread p))))
+  (prog1
+      (ignore-errors (bt:join-thread (thread p)))
+    ;; Let's be extra sure the streams are closed
+    (flet ((close-maybe (s)
+             (when (and (streamp s) (open-stream-p s))
+               (close s))))
+      (close-maybe (process-input p))
+      (close-maybe (process-output p)))))
 
 ;;;; Process I/O streams
 
