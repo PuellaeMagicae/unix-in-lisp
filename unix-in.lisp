@@ -11,8 +11,7 @@
            #:with-relative-symbols))
 
 (uiop:define-package :unix-in-lisp.common)
-(uiop:define-package :unix-user
-    (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
+(uiop:define-package :unix-user)
 
 (in-package #:unix-in-lisp)
 (named-readtables:in-readtable :standard)
@@ -1037,6 +1036,9 @@ symbol bindings."
                 (ensure-env-var symbol name)
                 (export symbol)))
             (get-env-names)))
+    ;; Make UNIX-USER
+    (uiop:define-package :unix-user
+        (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
     (defmethod print-object :around ((symbol symbol) stream)
       (if (and *print-escape*
                (eq (named-readtables:readtable-name *readtable*)
