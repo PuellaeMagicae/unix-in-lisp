@@ -408,7 +408,7 @@ to avoid race condition.")
 
 (defmethod close ((p simple-process) &key abort)
   (when abort
-    (sb-ext:process-kill (process p) sb-unix:sigterm))
+    (sb-ext:process-kill (process p) sb-unix:sigterm :process-group))
   (sb-ext:process-wait (process p))
   (sb-ext:process-close (process p))
   ;; SB-EXT:PROCESS-CLOSE may leave a closed stream.  Other part of
