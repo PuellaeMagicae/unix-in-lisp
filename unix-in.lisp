@@ -6,7 +6,7 @@
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
                 #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path
-           #:defile #:pipe #:seq
+           #:defile #:pipe #:seq #:fg #:&& #:||
            #:cd #:exit
            #:process-status #:process-exit-code
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
@@ -326,7 +326,8 @@ mechanisms."
 (defgeneric process-input (object)
   (:method ((object t))))
 (defgeneric process-status (object))
-(defgeneric process-exit-code (object))
+(defgeneric process-exit-code (object)
+  (:method ((object t)) 0))
 (defgeneric description (object))
 
 (defmethod print-object ((p process-mixin) stream)
@@ -412,13 +413,14 @@ to avoid race condition.")
   (when abort
     (sb-ext:process-kill (process p) sb-unix:sigterm :process-group))
   (sb-ext:process-wait (process p))
-  (sb-ext:process-close (process p))
-  ;; SB-EXT:PROCESS-CLOSE may leave a closed stream.  Other part of
-  ;; our code is not expecting this: `process-input'/`process-output'
-  ;; shall either be open stream or nil, therefore we make sure to
-  ;; set them to nil.
-  (setf (process-input p) nil
-        (process-output p) nil)
+  (synchronized (p)
+    (sb-ext:process-close (process p))
+    ;; SB-EXT:PROCESS-CLOSE may leave a closed stream.  Other part of
+    ;; our code is not expecting this: `process-input'/`process-output'
+    ;; shall either be open stream or nil, therefore we make sure to
+    ;; set them to nil.
+    (setf (process-input p) nil
+          (process-output p) nil))
   t)
 
 ;;;; Pipeline
@@ -465,7 +467,7 @@ to avoid race condition.")
    (output :accessor process-output)
    (function :reader process-function)
    (status :reader process-status)
-   (exit-code :reader process-exit-code)
+   (exit-code :reader process-exit-code :initform nil)
    (description :reader description :initarg :description))
   (:default-initargs :description "lisp"))
 
@@ -490,8 +492,9 @@ to avoid race condition.")
       (when (eq error :output)
         (setq error stdout))
       (setf (slot-value p 'function) function
-            (slot-value p 'status) :running
-            (slot-value p 'thread)
+            (slot-value p 'status) :running)
+      (call-next-method)
+      (setf (slot-value p 'thread)
             (bt:make-thread
              (lambda ()
                ;; Asynchronous-safe `unwind-protect', according to
@@ -517,8 +520,7 @@ to avoid race condition.")
                    (when (eq (slot-value p 'status) :running)
                      (setf (slot-value p 'status) :signaled)
                      (setf (slot-value p 'exit-code) sb-unix:sigterm))
-                   (nhooks:run-hook (status-change-hook p)))))))))
-  (call-next-method))
+                   (nhooks:run-hook (status-change-hook p))))))))))
 
 (defmethod close ((p lisp-process) &key abort)
   (when abort
@@ -627,21 +629,22 @@ See the methods for how we treat different types of objects."))
                        repl-thread
                        (lambda ()
                          (ignore-errors (throw 'finish nil))))))))
-               (cond (write-stream
-                      (loop
-                        (handler-case
-                            (write-char (read-char) write-stream)
-                          (end-of-file ()
-                            (close write-stream)
-                            (return)))
-                        (force-output write-stream)))
-                     (read-stream
-                      ;; wait for output to finish reading
-                      (loop (sleep 0.1)))
-                     (t (return-from repl-connect nil))))
+               (when write-stream
+                 (loop
+                   (handler-case
+                       (write-char (read-char) write-stream)
+                     (end-of-file ()
+                       (close write-stream)
+                       (return)))
+                   (force-output write-stream)))
+               (close p)
+               (when read-stream
+                 ;; wait for output to finish reading
+                 (loop (sleep 0.1))))
           (synchronized (p)
             (rotatef (process-output p) read-stream)
-            (rotatef (process-input p) write-stream)))
+            (rotatef (process-input p) write-stream))
+          (close p))
       (background () :report "Run job in background.")
       (abort () :report "Abort job."
         (close p :abort t))))
@@ -827,9 +830,42 @@ Example: (split-args a b :c d e) => (:c d), (a b e)"
 
 ;;;; Sequential execution
 
+(defmacro fg (&body forms)
+  "Run FORMS sequentially in foreground.
+If any of the FORMS evaluate to an effective process, make it
+foreground using `repl-connecct' and wait for its completion."
+  `(let (%process)
+     ,@ (mapcar (lambda (form)
+                  `(progn
+                     (setq %process ,form)
+                     (repl-connect %process)))
+                forms)
+     %process))
+
+(defun forms-description (forms separator)
+  (serapeum:string-join
+   (mapcar (lambda (form)
+             (prin1-to-string
+              (if (listp form) (car form) form)))
+           forms)
+   separator))
+
 (defmacro seq (&body forms)
   "Return a process that execute FORMS sequentially.
-If any of FORM evaluate to an effective process, redirect its
+If any of FORMS evaluate to an effective process, redirect its
+input/output to the returned process and wait for its completion."
+  (bind (((:values plist forms) (split-args forms)))
+    `(make-instance 'lisp-process
+                    :function
+                    (lambda ()
+                      (exit (process-exit-code (fg ,@forms))))
+                    :description
+                    ,(forms-description forms ";")
+                    ,@plist)))
+
+(defmacro && (&body forms)
+  "Return a process that execute FORMS until one fails.
+If any of FORMS evaluate to an effective process, redirect its
 input/output to the returned process and wait for its completion."
   (bind (((:values plist forms) (split-args forms)))
     `(make-instance 'lisp-process
@@ -840,18 +876,33 @@ input/output to the returned process and wait for its completion."
                                      `(progn
                                         (setq %process ,form)
                                         (repl-connect %process)
-                                        (when (streamp %process)
-                                          (close %process))))
-                                   forms)
-                        (when (typep %process 'process-mixin)
-                          (exit (process-exit-code %process)))))
+                                        (unless (zerop (process-exit-code %process))
+                                          (exit (process-exit-code %process)))))
+                                   forms))
+                      (exit 0))
                     :description
-                    ,(serapeum:string-join
-                      (mapcar (lambda (form)
-                                (prin1-to-string
-                                 (if (listp form) (car form) form)))
-                              forms)
-                      ";")
+                    ,(forms-description forms "&&")
+                    ,@plist)))
+
+(defmacro || (&body forms)
+  "Return a process that execute FORMS until one succeed.
+If any of FORMS evaluate to an effective process, redirect its
+input/output to the returned process and wait for its completion."
+  (bind (((:values plist forms) (split-args forms)))
+    `(make-instance 'lisp-process
+                    :function
+                    (lambda ()
+                      (let (%process)
+                        ,@ (mapcar (lambda (form)
+                                     `(progn
+                                        (setq %process ,form)
+                                        (repl-connect %process)
+                                        (when (zerop (process-exit-code %process))
+                                          (exit 0))))
+                                   forms)
+                        (exit (process-exit-code %process))))
+                    :description
+                    ,(forms-description forms "||")
                     ,@plist)))
 
 ;;; Built-in commands
@@ -862,7 +913,10 @@ input/output to the returned process and wait for its completion."
 
 (defun exit (exit-code)
   (if *lisp-process*
-      (setf (slot-value *lisp-process* 'exit-code) exit-code)
+      (progn
+        (setf (slot-value *lisp-process* 'exit-code) exit-code)
+        (setf (slot-value *lisp-process* 'status) :exited)
+        (sb-thread:abort-thread))
       (sb-ext:exit :code exit-code)))
 
 ;;; Reader syntax hacks
