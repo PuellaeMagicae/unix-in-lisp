@@ -7,8 +7,9 @@
                 #:assoc-value)
   (:export #:cd #:install #:uninstall #:setup #:ensure-path
            #:defile #:pipe #:seq
-           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix
-           #:with-relative-symbols))
+           #:cd #:exit
+           #:process-status #:process-exit-code
+           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
 
 (uiop:define-package :unix-in-lisp.common)
 (uiop:define-package :unix-user)
@@ -457,6 +458,7 @@ to avoid race condition.")
   (serapeum:string-join (mapcar #'description (processes p)) ","))
 
 ;;;; Lisp process
+
 (defclass lisp-process (process-mixin)
   ((thread :reader thread)
    (input :accessor process-input)
@@ -466,6 +468,8 @@ to avoid race condition.")
    (exit-code :reader process-exit-code)
    (description :reader description :initarg :description))
   (:default-initargs :description "lisp"))
+
+(defvar *lisp-process* nil)
 
 (defmethod initialize-instance
     ((p lisp-process) &key (function :function)
@@ -497,12 +501,13 @@ to avoid race condition.")
                       (let (*jobs*
                             (*standard-input* stdin)
                             (*standard-output* stdout)
-                            (*trace-output* error))
+                            (*trace-output* error)
+                            (*lisp-process* p))
                         (unwind-protect
                              (sb-sys:with-local-interrupts
                                (funcall function)
                                (setf (slot-value p 'status) :exited)
-                               (setf (slot-value p 'exit-code) 0))
+                               (ensure (slot-value p 'exit-code) 0))
                           (mapc
                            (lambda (p)
                              (close p))
@@ -830,12 +835,16 @@ input/output to the returned process and wait for its completion."
     `(make-instance 'lisp-process
                     :function
                     (lambda ()
-                      ,@ (mapcar (lambda (form)
-                                   `(let ((%process ,form))
-                                      (repl-connect %process)
-                                      (when (streamp %process)
-                                        (close %process))))
-                                 forms))
+                      (let (%process)
+                        ,@ (mapcar (lambda (form)
+                                     `(progn
+                                        (setq %process ,form)
+                                        (repl-connect %process)
+                                        (when (streamp %process)
+                                          (close %process))))
+                                   forms)
+                        (when (typep %process 'process-mixin)
+                          (exit (process-exit-code %process)))))
                     :description
                     ,(serapeum:string-join
                       (mapcar (lambda (form)
@@ -850,6 +859,11 @@ input/output to the returned process and wait for its completion."
 (defmacro cd (&optional (path "~"))
   `(bind ((%path (to-dir (ensure-path ,(list 'fare-quasiquote:quasiquote path) t))))
      (setq *default-pathname-defaults* (uiop:parse-native-namestring %path))))
+
+(defun exit (exit-code)
+  (if *lisp-process*
+      (setf (slot-value *lisp-process* 'exit-code) exit-code)
+      (sb-ext:exit :code exit-code)))
 
 ;;; Reader syntax hacks
 
