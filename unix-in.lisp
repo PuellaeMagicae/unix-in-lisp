@@ -324,7 +324,6 @@ mechanisms."
   (:method ((object t))))
 (defgeneric process-input (object)
   (:method ((object t))))
-(defgeneric process-wait (object))
 (defgeneric process-status (object))
 (defgeneric description (object))
 
@@ -376,9 +375,6 @@ setup before we add it to *jobs*."
 (defmethod (setf process-input) (new-value (p simple-process))
   (setf (sb-ext:process-input (process p)) new-value))
 
-(defmethod process-wait ((p simple-process))
-  (sb-ext:process-wait (process p)))
-
 (defmethod process-status ((p simple-process))
   (sb-ext:process-status (process p)))
 
@@ -426,9 +422,6 @@ to avoid race condition.")
   ((processes :reader processes :initarg :processes)
    (process-input :accessor process-input :initarg :process-input)
    (process-output :accessor process-output :initarg :process-output)))
-
-(defmethod process-wait ((p pipeline))
-  (mapc #'process-wait (processes p)))
 
 (defmethod close ((pipeline pipeline) &key abort)
   (iter (for p in (processes pipeline))
@@ -511,9 +504,6 @@ to avoid race condition.")
                    (setf (slot-value p 'status) :exited)
                    (nhooks:run-hook (status-change-hook p)))))))))
   (call-next-method))
-
-(defmethod process-wait ((p lisp-process))
-  (ignore-errors (bt:join-thread (thread p))))
 
 (defmethod close ((p lisp-process) &key abort)
   (when abort
