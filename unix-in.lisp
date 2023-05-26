@@ -279,6 +279,7 @@ mechanisms."
               (values (sb-sys:fd-stream-fd read-fd-or-stream) read-fd-or-stream)
               (values read-fd-or-stream (sb-sys:make-fd-stream read-fd-or-stream :input t))))
          ((:labels clean-up ())
+          (force-output stream)
           (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
           (close read-stream)
           (funcall continuation))
@@ -325,6 +326,7 @@ mechanisms."
 (defgeneric process-input (object)
   (:method ((object t))))
 (defgeneric process-status (object))
+(defgeneric process-exit-code (object))
 (defgeneric description (object))
 
 (defmethod print-object ((p process-mixin) stream)
@@ -377,6 +379,9 @@ setup before we add it to *jobs*."
 
 (defmethod process-status ((p simple-process))
   (sb-ext:process-status (process p)))
+
+(defmethod process-exit-code ((p simple-process))
+  (sb-ext:process-exit-code (process p)))
 
 (defvar *input-process-table* (make-hash-table :weakness :key)
   "Map input streams to simple-processes.
@@ -443,10 +448,11 @@ to avoid race condition.")
         (processes p)))
 
 (defmethod process-status ((p pipeline))
-  (if (some (lambda (child) (eq (process-status child) :running))
-            (processes p))
-      :running
-      :exited))
+  (let ((child-status (mapcar #'process-status (processes p))))
+    (cond ((find :running child-status) :running)
+          ((find :signaled child-status) :signaled)
+          ((find :stopped child-status) :stopped)
+          (t :exited))))
 
 (defmethod description ((p pipeline))
   (serapeum:string-join (mapcar #'description (processes p)) ","))
@@ -458,6 +464,7 @@ to avoid race condition.")
    (output :accessor process-output)
    (function :reader process-function)
    (status :reader process-status)
+   (exit-code :reader process-exit-code)
    (description :reader description :initarg :description))
   (:default-initargs :description "lisp"))
 
@@ -494,14 +501,18 @@ to avoid race condition.")
                             (*trace-output* error))
                         (unwind-protect
                              (sb-sys:with-local-interrupts
-                               (funcall function))
+                               (funcall function)
+                               (setf (slot-value p 'status) :exited)
+                               (setf (slot-value p 'exit-code) 0))
                           (mapc
                            (lambda (p)
                              (close p))
                            *jobs*)
                           (close stdin)
                           (close stdout)))
-                   (setf (slot-value p 'status) :exited)
+                   (when (eq (slot-value p 'status) :running)
+                     (setf (slot-value p 'status) :signaled)
+                     (setf (slot-value p 'exit-code) sb-unix:sigterm))
                    (nhooks:run-hook (status-change-hook p)))))))))
   (call-next-method))
 
