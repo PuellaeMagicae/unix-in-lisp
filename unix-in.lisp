@@ -282,9 +282,10 @@ mechanisms."
           (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
           (close read-stream)
           (funcall continuation))
-         (connection swank::*emacs-connection*)
+         #+swank (connection swank::*emacs-connection*)
          ((:labels read-data ())
-          (swank::with-connection (connection)
+          (#+swank swank::with-connection #+swank (connection)
+           #-swank progn
             (let (more)
               (unwind-protect
                    (handler-case
