@@ -102,7 +102,8 @@ Signals an error if the home package SYMBOL is not a Unix FS package."
      (format s "~a does not exist." (file-error-pathname c)))))
 
 (defun assert-file-kind (path &rest kinds)
-  (let ((kind (osicat:file-kind (uiop:parse-native-namestring path) :follow-symlinks t)))
+  (let ((kind (osicat:file-kind (uiop:parse-native-namestring (ensure-path path))
+                                :follow-symlinks t)))
     (unless (member kind kinds)
       (if kind
           (error 'wrong-file-kind :pathname path :wanted-kind kinds :actual-kind kind)
