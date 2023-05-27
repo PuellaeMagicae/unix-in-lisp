@@ -32,7 +32,7 @@ It's recommended to load ~unix-in-slime.el~ for better SLIME integration. To loa
 Counting number of files
 #+begin_src 
   /Users/kchan> (cd quicklisp/local-projects/unix-in-lisp)
-  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (pipe (wc -l) (ls))
+  /Users/kchan/quicklisp/local-projects/unix-in-lisp> (pipe (ls) (wc -l))
          9
 #+end_src
 But why not the Lisp way as well!
