@@ -148,7 +148,7 @@ Different from POSIX shell, Unix in Lisp by default run all command asynchronous
 
 The macro ~(fg . forms)~ run each of the ~forms~ in foreground via ~repl-connect~, just like how Unix in SLIME listener would run them.
 
-~seq,&&,||~ roughly correspond to ~;,&&,||~ in POSIX shell, except that they are all asynchronous. They return effective processes that aggregate the input/output of their sub-commands.
+~seq,&&,||~ roughly correspond to ~;,&&,||~ in POSIX shell, except that they are all asynchronous. They return effective processes that aggregate the input/output of their sub-commands. When you use Lisp code inside these operators, be aware that they run in a /different/ thread rather than the caller thread! The rule of thumb is that if you want something like ~progn~ for both regular Lisp and Unix in Lisp commands, use ~fg~ instead of ~seq~. Use ~seq,&&,||~ for composing effective processes only.
 ** Environment
 Unix environment variables are mapped to special (dynamic-scope) Lisp variables.
 #+begin_src

@@ -10,7 +10,7 @@ mcd () {
 
 #+begin_src lisp
 (defmacro mcd (dir)
-  `(seq
+  `(fg
      (mkdir -p ,dir)
      (cd ,dir)))
 #+end_src

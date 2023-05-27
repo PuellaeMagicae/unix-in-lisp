@@ -701,10 +701,11 @@ Use this when interfacing with Unix -- any complex S-expr
 representation is unlikely to be recognized by Unix tools.")
   (:method ((symbol symbol))
     "Don't print #: for uninterned symbol, because `intern-hook' creates
-such symbols."
-    (if (symbol-package symbol)
-        (prin1-to-string symbol)
-        (princ-to-string symbol)))
+such symbols. Also make sure we're using `:invert' readtable case."
+    (let ((*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
+      (if (symbol-package symbol)
+          (prin1-to-string symbol)
+          (princ-to-string symbol))))
   (:method ((seq sequence))
     "Zero element -> empty string.
 One element -> that element.
