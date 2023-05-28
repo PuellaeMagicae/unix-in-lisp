@@ -510,11 +510,16 @@ to avoid race condition.")
                         (unwind-protect
                              (sb-sys:with-local-interrupts
                                (funcall function)
+                               (mapc
+                                (lambda (p)
+                                  (close p))
+                                *jobs*)
+                               (setq *jobs* nil)
                                (setf (slot-value p 'status) :exited)
                                (ensure (slot-value p 'exit-code) 0))
                           (mapc
                            (lambda (p)
-                             (close p))
+                             (close p :abort t))
                            *jobs*)
                           (close stdin)
                           (close stdout)))
