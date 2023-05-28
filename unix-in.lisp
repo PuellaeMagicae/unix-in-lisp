@@ -258,9 +258,10 @@ entire input is seen, i.e. until EOF)."
   "Remove and close all file descriptors from `*fd-watcher-event-base*'.
 This is mainly for debugger purpose, to clean up the mess when dubious
 file descriptors are left open."
-  (iter (for (fd _) in-hashtable (iolib/multiplex::fds-of *fd-watcher-event-base*))
-    (iolib:remove-fd-handlers *fd-watcher-event-base* fd)
-    (isys:close fd)))
+  (synchronized (*fd-watcher-event-base*)
+    (iter (for (fd _) in-hashtable (iolib/multiplex::fds-of *fd-watcher-event-base*))
+      (iolib:remove-fd-handlers *fd-watcher-event-base* fd)
+      (isys:close fd))))
 
 (defun stop-fd-watcher ()
   "Destroy `*fd-watcher-thread*' and `*fd-watcher-event-base*'.
@@ -281,7 +282,8 @@ mechanisms."
               (values read-fd-or-stream (sb-sys:make-fd-stream read-fd-or-stream :input t))))
          ((:labels clean-up ())
           (force-output stream)
-          (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd)
+          (synchronized (*fd-watcher-event-base*)
+            (iolib:remove-fd-handlers *fd-watcher-event-base* read-fd))
           (close read-stream)
           (funcall continuation))
          #+swank (connection swank::*emacs-connection*)
@@ -300,13 +302,14 @@ mechanisms."
                   (clean-up)))))))
     (setf (isys:fd-nonblock-p read-fd) t)
     (ensure-fd-watcher)
-    (iolib:set-io-handler
-     *fd-watcher-event-base* read-fd
-     :read
-     (lambda (fd event error)
-       (unless (eq event :read)
-         (warn "FD watcher ~A get ~A ~A" fd event error))
-       (read-data)))
+    (synchronized (*fd-watcher-event-base*)
+      (iolib:set-io-handler
+       *fd-watcher-event-base* read-fd
+       :read
+       (lambda (fd event error)
+         (unless (eq event :read)
+           (warn "FD watcher ~A get ~A ~A" fd event error))
+         (read-data))))
     (values)))
 
 ;;; Job control
@@ -558,7 +561,8 @@ and will be closed after child process creation.")
     (native-lazy-seq:with-iterators (element next endp) p
       (bind (((:values read-fd write-fd) (osicat-posix:pipe))
              ((:labels clean-up ())
-              (iolib:remove-fd-handlers *fd-watcher-event-base* write-fd)
+              (synchronized (*fd-watcher-event-base*)
+                (iolib:remove-fd-handlers *fd-watcher-event-base* write-fd))
               (isys:close write-fd))
              ((:labels write-elements ())
               (let (more)
@@ -579,13 +583,14 @@ and will be closed after child process creation.")
                   (unless more (clean-up))))))
         (setf (isys:fd-nonblock-p write-fd) t)
         (ensure-fd-watcher)
-        (iolib:set-io-handler
-         *fd-watcher-event-base* write-fd
-         :write
-         (lambda (fd event error)
-           (unless (eq event :write)
-             (warn "FD watcher ~A get ~A ~A" fd event error))
-           (write-elements)))
+        (synchronized (*fd-watcher-event-base*)
+          (iolib:set-io-handler
+           *fd-watcher-event-base* write-fd
+           :write
+           (lambda (fd event error)
+             (unless (eq event :write)
+               (warn "FD watcher ~A get ~A ~A" fd event error))
+             (write-elements))))
         (sb-sys:make-fd-stream read-fd :input t :auto-close t)))))
 
 (defgeneric write-fd-stream (object)
