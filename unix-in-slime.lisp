@@ -117,9 +117,15 @@ thread-local/connection-local)."
   (unless (unix-in-slime-p)
     (funcall orig)))
 
+(defvar *default-directory* "~/"
+  "Emacs writes its `default-directory' into this variable,
+and the next connection to be created should pick this up.")
+
 (defun swank-repl-loop-hook (connection)
   (declare (ignore connection))
-  (setup))
+  (setup *default-directory*)
+  (setq *default-directory* "~/")
+  (values))
 
 (defun swank-create-repl-hook (orig &rest args)
   "Ugly hack to make the prompt on first start up display reasonably.
@@ -128,7 +134,8 @@ is called the first time???"
   (if (unix-in-slime-p)
       (let ((*package* (find-package :unix-user))
             (*default-pathname-defaults*
-              (uiop:parse-native-namestring (to-dir (ensure-path "~/")))))
+              (uiop:parse-native-namestring (to-dir *default-directory*)))
+            (*readtable* (named-readtables:find-readtable 'unix-in-lisp)))
         (apply orig args))
       (apply orig args)))
 

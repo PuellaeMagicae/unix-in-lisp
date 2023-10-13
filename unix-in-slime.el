@@ -53,6 +53,13 @@
       (comint-carriage-motion slime-output-start slime-output-end)
       (ansi-color-apply-on-region slime-output-start slime-output-end))))
 
+(define-advice slime-repl-connected-hook-function
+    (:before () unix-in-slime)
+  (when (unix-in-slime-p)
+    (slime-eval `(cl:setf (cl:symbol-value
+                        (cl:find-symbol "*DEFAULT-DIRECTORY*" "UNIX-IN-LISP"))
+                       ,default-directory))))
+
 ;;;###autoload
 (defun unix-in-slime ()
   "Create a SLIME listener running Unix in Lisp.
@@ -78,6 +85,16 @@ listening on `unix-in-slime-default-port'."
               (slime-connect "localhost" port)))))
     (save-selected-window (slime-start :init-function #'unix-in-slime))))
 
+;;;###autoload
+(defun unix-in-slime-next ()
+  "Switch to next Unix in Lisp listener.
+Create one if none existed."
+  (interactive)
+  (let ((buf (and t (get-buffer "*unix-in-slime*"))))
+    (if buf
+        (switch-to-buffer buf)
+      (unix-in-slime))))
+
 (defun unix-in-slime-p ()
   (when (and unix-in-slime-port (ignore-errors (slime-connection)))
     (equal (process-contact (slime-connection))
@@ -92,6 +109,8 @@ listening on `unix-in-slime-default-port'."
 
 (defun unix-in-slime-repl-setup ()
   (when (unix-in-slime-p)
+    (slime-eval-async
+        `(cl:progn (unix-in-lisp:cd ,default-directory) cl:nil))
     (rename-buffer "*unix-in-slime*" t)))
 
 (add-hook 'slime-repl-mode-hook #'unix-in-slime-repl-setup)

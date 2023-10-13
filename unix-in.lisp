@@ -5,7 +5,7 @@
                 #:concat #:string-prefix-p #:synchronized #:ensure)
   (:import-from :alexandria #:when-let #:if-let #:deletef #:ignore-some-conditions
                 #:assoc-value)
-  (:export #:cd #:install #:uninstall #:setup #:ensure-path
+  (:export #:install #:uninstall #:setup #:ensure-path
            #:defile #:pipe #:seq #:fg #:&& #:||
            #:cd #:exit
            #:process-status #:process-exit-code
@@ -1161,9 +1161,9 @@ symbol bindings."
     (cl-advice:remove-advice :around 'sb-impl::%intern 'intern-hook))
   (values))
 
-(defun setup ()
+(defun setup (&optional (path "~"))
   (ignore-some-conditions (already-installed) (install))
   (in-package :unix-user)
   (named-readtables:in-readtable unix-in-lisp)
-  (cd)
+  (cd path)
   (values))
