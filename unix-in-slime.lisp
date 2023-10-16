@@ -176,6 +176,7 @@ is called the first time???"
 (defun slime-uninstall ()
   (iter (while *swank-hooks*)
     (apply #'cl-advice:remove-advice (pop *swank-hooks*))))
+
 (cl-advice:add-advice :after 'install 'slime-install)
 (cl-advice:add-advice :before 'uninstall 'slime-uninstall)
 
@@ -185,3 +186,13 @@ Return its port.  Start one on DEFAULT-PORT if none is running yet."
   (ignore-some-conditions (already-installed) (install))
   (ensure *swank-port*
     (swank:create-server :port default-port :dont-close t)))
+
+;;; Askpass
+
+(defun askpass-emacs (prompt)
+  (swank::with-connection ((swank::default-connection))
+    (write-string
+     (swank:eval-in-emacs
+      `(read-passwd ,(concat prompt " "))))))
+
+(setq *askpass-function* 'askpass-emacs)

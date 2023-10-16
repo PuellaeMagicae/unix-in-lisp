@@ -120,5 +120,8 @@ Create one if none existed."
   (let ((dir (slime-eval '(uiop:native-namestring cl:*default-pathname-defaults*))))
     (setq-local default-directory dir)))
 
+;; TODO: safety and modularity improvement: only enable in Unix in SLIME?
+(setq-default slime-enable-evaluate-in-emacs t)
+
 (provide 'unix-in-slime)
 ;;; unix-in-slime.el ends here

@@ -9,6 +9,7 @@
                :nhooks
                :native-lazy-seq
                :iolib
-               :iolib/os)
+               :iolib/os
+               :scriptl)
   :components ((:file "unix-in")
                #+(or swank slynk) (:file "unix-in-slime" :depends-on ("unix-in"))))

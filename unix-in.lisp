@@ -9,7 +9,8 @@
            #:defile #:pipe #:seq #:fg #:&& #:||
            #:cd #:exit
            #:process-status #:process-exit-code
-           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix))
+           #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix
+           #:*post-command-hook*))
 
 (uiop:define-package :unix-in-lisp.common)
 (uiop:define-package :unix-user)
@@ -978,14 +979,14 @@ Currently, this is intended to be used for ~user/path syntax."
 
 (defun dollar-read-macro (stream char)
   "If we're reading a symbol that starts with `$', rehome it to
-`UNIX-IN-LISP.COMMON' and call `ensure-env-var'."
+`unix-in-lisp.common' and call `ensure-env-var'."
   (unread-char char stream)
   (let ((symbol (call-without-read-macro char (lambda () (read stream)))))
     (when (and (symbol-home-p symbol)
                (string-prefix-p "$" (symbol-name symbol)))
       (unintern symbol)
-      (setq symbol (intern (symbol-name symbol) "UNIX-IN-LISP.COMMON"))
-      (export symbol "UNIX-IN-LISP.COMMON")
+      (setq symbol (intern (symbol-name symbol) :unix-in-lisp.common))
+      (export symbol :unix-in-lisp.common)
       (ensure-env-var symbol))
     symbol))
 
@@ -1077,6 +1078,25 @@ symbol bindings."
 
 (nhooks:add-hook *post-command-hook* 'synchronize-env-to-unix)
 
+;;; Askpass
+
+(defvar *askpass-function* 'getpass)
+
+(defun askpass (&optional (prompt "Password:"))
+  (funcall *askpass-function* prompt))
+
+(sb-alien:define-alien-routine "getpass" sb-alien:c-string
+  (prompt sb-alien:c-string))
+
+(defun setup-askpass-env ()
+  (let ((path (asdf:system-relative-pathname "unix-in-lisp" #P"askpass")))
+    (scriptl:make-script path 'askpass)
+    (iter (for name in '("SSH_ASKPASS" "GIT_ASKPASS" "SUDO_ASKPASS"))
+      (for symbol = (intern (concat "$" name) :unix-in-lisp.common))
+      (ensure-env-var symbol)
+      (export symbol :unix-in-lisp.common)
+      (setf (symbol-value symbol) (uiop:native-namestring path)))))
+
 ;;; Installation/uninstallation
 
 (define-condition already-installed (error) ()
@@ -1109,12 +1129,11 @@ symbol bindings."
     (uiop:ensure-package :unix-in-lisp.common
                          :mix '(:unix-in-lisp.path)
                          :reexport '(:unix-in-lisp.path))
-    (let ((*package* (find-package :unix-in-lisp.common)))
-      (mapc (lambda (name)
-              (let ((symbol (intern (concat "$" name))))
-                (ensure-env-var symbol name)
-                (export symbol)))
-            (get-env-names)))
+    (mapc (lambda (name)
+            (let ((symbol (intern (concat "$" name) :unix-in-lisp.common)))
+              (ensure-env-var symbol name)
+              (export symbol :unix-in-lisp.common)))
+          (get-env-names))
     ;; Make UNIX-USER
     (uiop:define-package :unix-user
         (:mix :unix-in-lisp :unix-in-lisp.common :serapeum :alexandria :cl))
@@ -1131,6 +1150,10 @@ symbol bindings."
     (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-reader 'unquote-reader-hook)
     (cl-advice:add-advice :around 'fare-quasiquote:call-with-unquote-splicing-reader 'unquote-reader-hook)
     (ensure-fd-watcher)
+    ;; Askpass
+    (scriptl:start)
+    (setup-askpass-env)
+    (synchronize-env-to-unix)
     t))
 
 (defun uninstall ()
