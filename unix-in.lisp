@@ -1186,7 +1186,7 @@ symbol bindings."
 
 (defun setup (&optional (path "~"))
   (ignore-some-conditions (already-installed) (install))
-  (in-package :unix-user)
+  (setq *package* (find-package :unix-user))
   (named-readtables:in-readtable unix-in-lisp)
-  (cd path)
+  (setq *default-pathname-defaults* (uiop:parse-native-namestring path))
   (values))
