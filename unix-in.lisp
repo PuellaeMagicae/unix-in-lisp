@@ -683,8 +683,8 @@ See the methods for how we treat different types of objects."))
   (ignore-some-conditions (file-error)
     (let ((stream (open path :external-format :latin-1)))
       (if (ignore-errors
-           (and (read-shebang stream)
-                (string= (read-line stream) "/usr/bin/env sbcl --script")))
+           (and (read-shebang stream) ;; will pop 2 chars off (likely "#!")
+                (string= (read-line stream) "/usr/bin/env -S sbcl --script")))
           (make-instance 'lisp-process
                          :function
                          (lambda ()
