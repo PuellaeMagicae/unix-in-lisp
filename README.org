@@ -174,7 +174,7 @@ Unix in Lisp keeps its own idea of a Unix environment, and pass to subprocesses 
 ** Scripting (blazingly fast start up)
 The recommended way to write scripts is to create executable files (say ~do-stuff.sh~) with contents like
 #+begin_src
-#!/usr/env/bin sbcl --script
+#!/usr/bin/env -S sbcl --script
 (asdf:require-system "<dependency>")
 (asdf:require-system "unix-in-lisp")
 (unix-in-lisp:setup)
@@ -182,7 +182,7 @@ The recommended way to write scripts is to create executable files (say ~do-stuf
 #+end_src
 
 The benefit of the above approach is that it is blazingly fast when started from within Unix in Lisp (via e.g. ~(do-stuff.sh)~), because Unix in Lisp has a /Fast loading command/ mechanism, which can execute the script within Unix in Lisp image without starting subprocess if it detects a Lisp shebang. The essence of writing fast startup script is:
-1. Use ~#!/usr/env/bin sbcl --script~ shebang. Currently it has to be an exact match.
+1. Use ~#!/usr/bin/env -S sbcl --script~ shebang. Currently it has to be an exact match.
 2. Use ~asdf:require-system~. This avoids scanning the ASDF registry directory tree for modification, which wastes significant time!
 
 On my machine, a hello world using the above approach run in 0.5ms, while Python 3 uses 30ms!
