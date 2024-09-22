@@ -49,6 +49,7 @@ Directories are mapped as /Unix FS packages/. A Unix FS packages is any Common L
 The exported symbols of a Unix FS package should one-to-one correspond to files in the mapped directory. Exceptions to this one-to-one correspondence:
 - Because of the limit of file system change tracking, the package structure in the Common Lisp image may diverge from the Unix FS state.
   - Currently, the state of a Unix FS package is synchronized when calling ~mount-directory~. By default, ~remount-current-directory~ is added to ~*post-command-hook*~, which does the obvious thing.
+  - If your environment's ~$PATH~ includes directories that do not exist, you will see warnings at every prompt like "~warning: Failed to mount /bad/path/ in $PATH: /bad/path/ does not exist.~" You'd benefit from fixing this where ~$PATH~ is defined (~.bashrc~, ~.profile~, ...), but can use ~(setf unix-in-lisp:*path-warning* nil)~ to silence the warnings instead.
 
 Each of these exported symbols has a global symbol macro binding, so that they can be read/write like Lisp variables. Access to the symbol gives the list of lines of the underlying file, and setting it with a list designator of lines cause them to be written to the file.
 
