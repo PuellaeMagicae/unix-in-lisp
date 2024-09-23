@@ -10,6 +10,9 @@
                :native-lazy-seq
                :iolib
                :iolib/os
-               :scriptl)
+               :scriptl
+               ; pulled in by depends but explicitly used
+               :alexandria
+               :serapeum)
   :components ((:file "unix-in")
                #+(or swank slynk) (:file "unix-in-slime" :depends-on ("unix-in"))))
