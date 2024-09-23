@@ -10,7 +10,7 @@
            #:cd #:exit
            #:process-status #:process-exit-code
            #:repl-connect #:*jobs* #:ensure-env-var #:synchronize-env-to-unix
-           #:*post-command-hook*))
+           #:*post-command-hook* #:*path-warning*))
 
 (uiop:define-package :unix-in-lisp.common)
 (uiop:define-package :unix-user)
@@ -19,6 +19,8 @@
 (named-readtables:in-readtable :standard)
 
 (defvar *post-command-hook* (make-instance 'nhooks:hook-void))
+(defvar *path-warning* t
+  "Show warnings when a directory in $PATH cannot be mounted.")
 
 ;;; File system
 
@@ -1111,7 +1113,7 @@ symbol bindings."
   (let ((packages (iter (for path in (uiop:getenv-pathnames "PATH"))
                     (handler-case
                         (collect (mount-directory path))
-                      (file-error (c) (warn "Failed to mount ~A in $PATH: ~A" path c))))))
+                      (file-error (c) (when *path-warning* (warn "Failed to mount ~A in $PATH: ~A" path c)))))))
     (uiop:ensure-package :unix-in-lisp.path :mix packages :reexport packages)))
 
 (nhooks:add-hook *post-command-hook* 'ensure-path-package)
