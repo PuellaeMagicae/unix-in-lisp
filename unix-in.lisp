@@ -1184,7 +1184,7 @@ symbol bindings."
     (cl-advice:remove-advice :around 'sb-impl::%intern 'intern-hook))
   (values))
 
-(defun setup (&optional (path "~"))
+(defun setup (&optional (path (namestring (or (uiop/os:getcwd) (user-homedir-pathname)))))
   (ignore-some-conditions (already-installed) (install))
   (setq *package* (find-package :unix-user))
   (named-readtables:in-readtable unix-in-lisp)
