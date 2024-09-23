@@ -19,7 +19,7 @@
 (named-readtables:in-readtable :standard)
 
 (defvar *post-command-hook* (make-instance 'nhooks:hook-void))
-(defvar *path-warning* 1
+(defvar *path-warning* t
   "Show warnings when a directory in $PATH cannot be mounted.")
 
 ;;; File system
